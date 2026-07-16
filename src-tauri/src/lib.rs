@@ -1090,7 +1090,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init());
 
-    builder
+    let builder = builder
         .manage(AcpState::default())
         .invoke_handler(tauri::generate_handler![
             grok_installed,
@@ -1107,7 +1107,65 @@ pub fn run() {
             respond_hook,
             send_prompt,
             cancel
-        ])
+        ]);
+
+    #[cfg(desktop)]
+    let builder = builder.setup(|app| {
+        use tauri::menu::{Menu, MenuItem};
+        use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+        use tauri::Manager;
+
+        let show = MenuItem::with_id(app, "show", "Show Grok Build", true, None::<&str>)?;
+        let new_chat = MenuItem::with_id(app, "newchat", "New chat", true, None::<&str>)?;
+        let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+        let menu = Menu::with_items(app, &[&show, &new_chat, &quit])?;
+
+        let mut tray = TrayIconBuilder::new()
+            .menu(&menu)
+            .show_menu_on_left_click(false)
+            .on_menu_event(|app, event| match event.id().as_ref() {
+                "quit" => app.exit(0),
+                "show" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                    }
+                }
+                "newchat" => {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                    }
+                    let _ = app.emit("tray-new-chat", ());
+                }
+                _ => {}
+            })
+            .on_tray_icon_event(|tray, event| {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    let app = tray.app_handle();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                    }
+                }
+            });
+
+        if let Some(icon) = app.default_window_icon().cloned() {
+            tray = tray.icon(icon);
+        }
+        let _ = tray.build(app)?;
+        Ok(())
+    });
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
