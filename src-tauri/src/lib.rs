@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -39,10 +39,18 @@ struct Session {
     session_id: Option<String>,
     next_id: Arc<AtomicI64>,
     pending: Pending,
+    /// Set to stop this session's approval-hook watcher thread.
+    approval_stop: Arc<AtomicBool>,
 }
 
 impl Session {
     fn kill(mut self) {
+        // Stop the approval watcher and drop the live marker so the global hook
+        // stops gating this session (and never gates the user's own terminal grok).
+        self.approval_stop.store(true, Ordering::SeqCst);
+        if let (Some(root), Some(sid)) = (bridge_root(), self.session_id.as_ref()) {
+            let _ = std::fs::remove_file(root.join("live").join(sid));
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -189,10 +197,11 @@ fn spawn_reader(app: AppHandle, stdout: ChildStdout, stdin: Arc<Mutex<ChildStdin
                 "session/update" => {
                     let _ = app.emit("acp-update", params);
                 }
-                // The agent wants approval before touching a file. We deliberately do
-                // NOT answer here: the JSON-RPC request stays open while the user looks
-                // at the diff, and `respond_permission` sends their actual decision.
-                // Nothing is written to disk until they say so.
+                // The ACP way to ask for approval. In practice grok 0.2.101 never
+                // sends this over `agent stdio` (verified), so this path is inert —
+                // the live gate is the PreToolUse hook watcher (see start_approval).
+                // Kept because it's correct and costs nothing if a future grok does
+                // send it: we leave the request open and answer via `respond_permission`.
                 "session/request_permission" => {
                     let mut payload = params.clone();
                     if let (Some(obj), Some(id)) = (payload.as_object_mut(), msg.get("id")) {
@@ -234,8 +243,242 @@ fn is_auth_error(msg: &str) -> bool {
     m.contains("authentication required") || m.contains("auth method") || m.contains("unauthorized")
 }
 
+// ---- Approval bridge (default-deny PreToolUse hook) --------------------------
+//
+// `grok agent stdio` never emits `session/request_permission` (verified against
+// grok 0.2.101, with and without `[features] support_permission`), so the ACP
+// permission path above is inert. The real gate is a global `PreToolUse` hook.
+//
+// A denylist does NOT hold: told to edit a file with `write`/`search_replace`/
+// shell all denied, grok routes around it via `monitor` (an undocumented
+// background-shell tool) in a single turn. Only a DEFAULT-DENY ALLOWLIST holds:
+// the hook auto-allows a fixed read-only tool set and asks the user about
+// everything else. This is best-effort, not a hard boundary — grok's hook runner
+// FAILS OPEN if the hook process times out or crashes.
+//
+// Transport is files under `~/.grok/gbd-bridge/` (no ports, per the README):
+//   live/<sessionId>  marker: this session is app-owned, so the hook gates it.
+//   req/<toolUseId>.json   the hook drops a pending tool call here.
+//   resp/<toolUseId>.json  we write {"decision": ...} here; the hook reads it.
+// The hook script (installed below) speaks this protocol; we parse the JSON.
+
+/// The read-only tools the hook auto-allows. Everything else needs approval.
+/// Kept in sync with the allowlist embedded in `HOOK_SCRIPT`.
+const READONLY_TOOLS: &[&str] = &[
+    "read_file",
+    "list_dir",
+    "grep",
+    "search_tool",
+    "web_search",
+    "web_fetch",
+    "get_command_or_subagent_output",
+    "monitor_status",
+];
+
+/// The POSIX-sh hook. Uses only grep/sed (no jq) so it runs on a bare machine;
+/// the real JSON parsing happens Rust-side. It default-denies by asking us.
+const HOOK_SCRIPT: &str = r#"#!/bin/sh
+# Installed by Grok Build Desktop. Gates only sessions the app marks live.
+BRIDGE="$HOME/.grok/gbd-bridge"
+INPUT=$(cat)
+field() { printf '%s' "$INPUT" | grep -o "\"$1\":\"[^\"]*\"" | head -1 | sed "s/\"$1\":\"//;s/\"\$//"; }
+SID=$(field sessionId)
+TOOL=$(field toolName)
+TUID=$(field toolUseId)
+
+# Not an app-owned session (e.g. the user's own terminal grok) -> never gate.
+if [ -z "$SID" ] || [ ! -f "$BRIDGE/live/$SID" ]; then
+  printf '{"decision":"allow"}\n'; exit 0
+fi
+
+# Read-only tools pass automatically. Keep in sync with READONLY_TOOLS.
+case "$TOOL" in
+  read_file|list_dir|grep|search_tool|web_search|web_fetch|get_command_or_subagent_output|monitor_status)
+    printf '{"decision":"allow"}\n'; exit 0 ;;
+esac
+
+[ -n "$TUID" ] || TUID="req-$$-$(date +%s)"
+REQ="$BRIDGE/req/$TUID.json"
+RESP="$BRIDGE/resp/$TUID.json"
+printf '%s' "$INPUT" > "$REQ.tmp" 2>/dev/null && mv "$REQ.tmp" "$REQ" 2>/dev/null
+
+# Wait for the user's decision. Internal deadline (~580s) is shorter than the
+# hook's own timeout (600s) so we return an explicit deny instead of being killed.
+i=0
+while [ "$i" -lt 5800 ]; do
+  if [ -f "$RESP" ]; then
+    cat "$RESP"
+    rm -f "$RESP" "$REQ" 2>/dev/null
+    exit 0
+  fi
+  sleep 0.1
+  i=$((i + 1))
+done
+rm -f "$REQ" 2>/dev/null
+printf '{"decision":"deny","reason":"Approval timed out (no answer from Grok Build Desktop)."}\n'
+exit 0
+"#;
+
+fn bridge_root() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".grok/gbd-bridge"))
+}
+
+fn clear_dir(dir: &std::path::Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+fn basename(path: &str) -> String {
+    path.rsplit(['/', '\\']).next().filter(|s| !s.is_empty()).unwrap_or(path).to_string()
+}
+
+/// Install (or refresh) the global PreToolUse hook. Unix only for now — the sh
+/// script needs a POSIX shell; Windows approval is a follow-up. Best-effort:
+/// a failure here just means no gate, which is the pre-existing behavior.
+#[cfg(unix)]
+fn install_approval_hook() -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let hooks = home_dir().ok_or("no home dir")?.join(".grok/hooks");
+    std::fs::create_dir_all(&hooks).map_err(|e| e.to_string())?;
+    let script = hooks.join("gbd-approval.sh");
+    std::fs::write(&script, HOOK_SCRIPT).map_err(|e| e.to_string())?;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+        .map_err(|e| e.to_string())?;
+    // `{:?}` debug-formats the path as a valid, escaped JSON string.
+    let cfg = format!(
+        r#"{{"hooks":{{"PreToolUse":[{{"hooks":[{{"type":"command","command":{:?},"timeout":600}}]}}]}}}}"#,
+        script.to_string_lossy()
+    );
+    std::fs::write(hooks.join("gbd-approval.json"), cfg).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn install_approval_hook() -> Result<(), String> {
+    Ok(()) // Windows: edit approval is a follow-up (the sh hook needs a POSIX shell).
+}
+
+/// Turn a raw hook payload into the `acp-permission` shape the webview already
+/// renders (PermissionCard). Mutating tools get a diff or command preview.
+fn build_permission_payload(req: &Value) -> Value {
+    let tool = req.get("toolName").and_then(Value::as_str).unwrap_or("");
+    let tuid = req.get("toolUseId").and_then(Value::as_str).unwrap_or("");
+    let input = req.get("toolInput").cloned().unwrap_or(Value::Null);
+    let s = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+
+    let (title, content) = match tool {
+        "search_replace" => (
+            format!("Edit {}", basename(&s("file_path"))),
+            json!([{"type": "diff", "path": s("file_path"), "oldText": s("old_string"), "newText": s("new_string")}]),
+        ),
+        "write" | "create_file" => (
+            format!("Write {}", basename(&s("file_path"))),
+            json!([{"type": "diff", "path": s("file_path"), "oldText": "", "newText": s("content")}]),
+        ),
+        "run_terminal_command" | "monitor" => (
+            "Run a shell command".to_string(),
+            json!([{"type": "command", "text": s("command")}]),
+        ),
+        other => (
+            format!("Grok wants to use {other}"),
+            json!([{"type": "command", "text": serde_json::to_string_pretty(&input).unwrap_or_default()}]),
+        ),
+    };
+
+    json!({
+        "requestId": 0,
+        "hookToolUseId": tuid,
+        "toolCall": {"title": title, "content": content},
+        "options": [
+            {"optionId": "allow", "name": "Allow", "kind": "allow"},
+            {"optionId": "deny",  "name": "Deny",  "kind": "reject"}
+        ]
+    })
+}
+
+/// Prepare the bridge for a freshly-opened session: clear stale requests, install
+/// the hook, mark this session live, and start watching for approval requests.
+fn start_approval(app: &AppHandle, session_id: &str, stop: Arc<AtomicBool>) {
+    let Some(root) = bridge_root() else { return };
+    for sub in ["req", "resp", "live"] {
+        let _ = std::fs::create_dir_all(root.join(sub));
+    }
+    // A new session starts with a clean slate — never inherit a prior run's requests.
+    clear_dir(&root.join("req"));
+    clear_dir(&root.join("resp"));
+    let _ = install_approval_hook();
+    let _ = std::fs::write(root.join("live").join(session_id), b"1");
+
+    let app = app.clone();
+    let session_id = session_id.to_string();
+    thread::spawn(move || {
+        let req_dir = root.join("req");
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while !stop.load(Ordering::SeqCst) {
+            if let Ok(entries) = std::fs::read_dir(&req_dir) {
+                for e in entries.flatten() {
+                    let path = e.path();
+                    if path.extension().and_then(|x| x.to_str()) != Some("json") {
+                        continue;
+                    }
+                    let name = match path.file_name().and_then(|n| n.to_str()) {
+                        Some(n) if !seen.contains(n) => n.to_string(),
+                        _ => continue,
+                    };
+                    let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                    let Ok(reqv) = serde_json::from_str::<Value>(&text) else { continue };
+                    if reqv.get("sessionId").and_then(Value::as_str) != Some(session_id.as_str()) {
+                        continue;
+                    }
+                    seen.insert(name);
+                    // Defense in depth: never prompt for a read-only tool, even if
+                    // the hook script's allowlist ever drifts from READONLY_TOOLS.
+                    let tool = reqv.get("toolName").and_then(Value::as_str).unwrap_or("");
+                    if READONLY_TOOLS.contains(&tool) {
+                        if let Some(tuid) = reqv.get("toolUseId").and_then(Value::as_str) {
+                            let _ = write_decision(tuid, true);
+                        }
+                        continue;
+                    }
+                    let _ = app.emit("acp-permission", build_permission_payload(&reqv));
+                }
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+    });
+}
+
+/// Write the decision the hook script is polling for (atomic via tmp+rename).
+fn write_decision(tool_use_id: &str, allow: bool) -> Result<(), String> {
+    let resp_dir = bridge_root().ok_or("no home dir")?.join("resp");
+    std::fs::create_dir_all(&resp_dir).map_err(|e| e.to_string())?;
+    let decision = if allow {
+        json!({"decision": "allow"})
+    } else {
+        json!({"decision": "deny", "reason": "Denied in Grok Build Desktop."})
+    };
+    let tmp = resp_dir.join(format!("{tool_use_id}.json.tmp"));
+    let final_path = resp_dir.join(format!("{tool_use_id}.json"));
+    std::fs::write(&tmp, decision.to_string()).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &final_path).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Answer a hook-gated tool call from the webview (Allow/Deny).
+#[tauri::command]
+fn respond_hook(tool_use_id: String, allow: bool) -> Result<(), String> {
+    write_decision(&tool_use_id, allow)
+}
+
 /// Ask the live agent for a session in `cwd`. Separated so it can be retried after sign-in.
-fn new_session(state: &State<AcpState>, cwd: &str) -> Result<Result<String, String>, String> {
+fn new_session(
+    app: &AppHandle,
+    state: &State<AcpState>,
+    cwd: &str,
+) -> Result<Result<String, String>, String> {
     let (stdin, pending, next_id) = {
         let guard = state.inner.lock().map_err(|e| e.to_string())?;
         let s = guard.as_ref().ok_or("not connected to grok")?;
@@ -259,10 +502,17 @@ fn new_session(state: &State<AcpState>, cwd: &str) -> Result<Result<String, Stri
                 .and_then(Value::as_str)
                 .ok_or("grok didn't return a sessionId")?
                 .to_string();
-            if let Ok(mut guard) = state.inner.lock() {
-                if let Some(s) = guard.as_mut() {
+            let stop = if let Ok(mut guard) = state.inner.lock() {
+                guard.as_mut().map(|s| {
                     s.session_id = Some(id.clone());
-                }
+                    s.approval_stop.clone()
+                })
+            } else {
+                None
+            };
+            // Arm the approval gate for this session before the user can prompt.
+            if let Some(stop) = stop {
+                start_approval(app, &id, stop);
             }
             Ok(Ok(id))
         }
@@ -422,8 +672,9 @@ fn connect(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<Connec
     let next_id = Arc::new(AtomicI64::new(1));
     spawn_reader(app.clone(), stdout, stdin.clone(), pending.clone());
 
-    // We don't advertise fs capabilities: grok uses its own file tools (which it
-    // asks permission for) rather than asking us to read/write on its behalf.
+    // We don't advertise fs capabilities: grok uses its own file tools rather than
+    // asking us to read/write on its behalf. It does NOT ask permission over ACP —
+    // approval is enforced out-of-band by our PreToolUse hook (see start_approval).
     let rx = request(
         &stdin,
         &pending,
@@ -450,10 +701,11 @@ fn connect(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<Connec
         session_id: None,
         next_id,
         pending,
+        approval_stop: Arc::new(AtomicBool::new(false)),
     });
 
     // Try for a session; a fresh install will bounce us to sign-in instead.
-    match new_session(&state, &cwd)? {
+    match new_session(&app, &state, &cwd)? {
         Ok(session_id) => Ok(ConnectResult {
             needs_auth: false,
             auth_methods,
@@ -491,8 +743,8 @@ fn authenticate(state: State<AcpState>, method_id: String) -> Result<(), String>
 
 /// Open a session after a successful sign-in.
 #[tauri::command]
-fn open_session(state: State<AcpState>, cwd: String) -> Result<String, String> {
-    new_session(&state, &cwd)?
+fn open_session(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<String, String> {
+    new_session(&app, &state, &cwd)?
 }
 
 /// Answer an open `session/request_permission`. `option_id` of None means "the user
@@ -588,6 +840,7 @@ pub fn run() {
             authenticate,
             open_session,
             respond_permission,
+            respond_hook,
             send_prompt,
             cancel
         ])

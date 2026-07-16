@@ -12,6 +12,10 @@ This is a small desktop app that fixes that. Download it, click **Install Grok B
 click **Sign in**, pick a folder, and type what you want in plain English. No terminal,
 no `npm install`, no API keys to hunt down, no config files.
 
+**[Download the latest release](https://github.com/Rushour0/grok-build-desktop/releases/latest)**
+— macOS, Windows, and Linux installers. Builds are unsigned, so your OS will warn on
+first open. On macOS, right-click the app and choose **Open**.
+
 > **Status: early.** The app installs the CLI, signs you in, opens a folder, and streams
 > real answers and live tool activity back. See [Known limits](#known-limits) before you
 > point it at anything precious.
@@ -52,19 +56,21 @@ npm run tauri dev
 
 ## Known limits
 
-**Grok edits files without asking first.** This is the big one, and it's worth being
-precise about. `grok agent stdio` executes its tools directly — verified against
-grok 0.2.101: prompting it to rewrite a file rewrote the file, with no
-`session/request_permission` ever sent and `yolo: false` on the session. So the agent
-mode this app drives has no built-in per-edit approval step to hook into.
+**Grok's ACP approval path does not fire.** Verified against grok 0.2.101:
+`grok agent stdio` never emits `session/request_permission`, with or without
+`[features] support_permission = true`. This was not a configuration mistake.
 
-The real gate is Grok's [hooks](https://github.com/xai-org/grok-build) system: a
-`PreToolUse` hook can deny a tool call, and hooks can call an HTTP endpoint. Wiring
-that back into this app is the next thing to build. Until then, **use this on a folder
-under version control**, so you can always `git diff` and undo.
+v0.2.0 adds a real approval gate through Grok's `PreToolUse` hook system. The app
+installs a global, default-deny hook that asks you to **Allow** or **Deny** each file
+edit or shell command before it runs. Only known read-only tools pass automatically.
+It is default-deny on purpose: Grok will try alternate tools when one is blocked (it
+will reach for a shell or a background-task tool if a file-edit tool is denied), so an
+allowlist of safe tools holds where a denylist of dangerous ones does not.
 
-The client code already handles `session/request_permission` if the agent ever does send
-it — that path just doesn't fire today.
+This is meaningful risk reduction, not a hard security boundary. The hook system fails
+open: if the approval process times out or crashes, Grok proceeds. Approval is available
+on **macOS and Linux**; Windows support is a follow-up. **Use this on a folder under
+version control**, so you can always `git diff` and undo.
 
 ## Roadmap
 
@@ -73,10 +79,20 @@ it — that path just doesn't fire today.
 - [x] Folder picker → session → streamed answers + live tool cards
 - [x] Recent projects, read from the CLI's own session store
 - [x] Installers built by CI for macOS / Windows / Linux
-- [ ] **Approval before edits** — via a `PreToolUse` hook bridged back to the app
-- [ ] Plan timeline, run history, cost display
+- [x] **Approval before edits** — via a `PreToolUse` hook bridged back to the app
+  (default-deny hook; macOS/Linux; best-effort, fails open)
+- [x] Plan timeline — the agent's plan streams into the transcript as it works
+- [ ] Run history, cost display
+- [ ] Approval on Windows
 - [ ] Code-signed builds (no Gatekeeper/SmartScreen warning)
 - [ ] Optional `XAI_API_KEY` sign-in for people using API credits
+
+Not yet, on the list:
+
+- [ ] Persistent chat history and search
+- [ ] File drop into prompts
+- [ ] Tabbed parallel runs
+- [ ] System tray
 
 ## Credits
 

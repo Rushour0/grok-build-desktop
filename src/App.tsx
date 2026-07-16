@@ -12,6 +12,7 @@ import {
   sendPrompt,
   cancelRun,
   respondPermission,
+  respondHook,
   subscribe,
   type AuthMethod,
   type PermissionRequest,
@@ -40,11 +41,17 @@ interface AskItem {
   req: PermissionRequest;
   decided: string | null;
 }
-type Item = ToolItem | TextItem | AskItem;
+interface PlanItem {
+  id: string;
+  kind: "plan";
+  entries: { content: string; status?: string; priority?: string }[];
+}
+type Item = ToolItem | TextItem | AskItem | PlanItem;
 
 const isTool = (i: Item): i is ToolItem => i.kind === "tool";
 const isAsk = (i: Item): i is AskItem => i.kind === "ask";
-const isText = (i: Item): i is TextItem => !isTool(i) && !isAsk(i);
+const isPlan = (i: Item): i is PlanItem => i.kind === "plan";
+const isText = (i: Item): i is TextItem => !isTool(i) && !isAsk(i) && !isPlan(i);
 
 function folderName(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean);
@@ -67,6 +74,8 @@ export default function App() {
   // Chunks stream in one fragment at a time; keep appending to the same bubble
   // until something else happens rather than making a bubble per fragment.
   const openBubble = useRef<{ answer?: string; thought?: string }>({});
+  // Grok resends the whole plan as it evolves; update one card in place per turn.
+  const planId = useRef<string | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -147,8 +156,22 @@ export default function App() {
           );
           break;
         }
+        case "plan": {
+          const entries = u.entries ?? [];
+          setItems((prev) => {
+            const id = planId.current;
+            if (id && prev.some((i) => isPlan(i) && i.id === id)) {
+              return prev.map((i) => (isPlan(i) && i.id === id ? { ...i, entries } : i));
+            }
+            const newId = `plan-${Date.now()}`;
+            planId.current = newId;
+            return [...prev, { id: newId, kind: "plan", entries }];
+          });
+          openBubble.current = {};
+          break;
+        }
         default:
-          break; // plan / user chunks: not surfaced yet
+          break; // user_message_chunk: the echo of our own prompt, no need to show
       }
     },
     [appendText],
@@ -164,6 +187,7 @@ export default function App() {
       onTurnEnd: () => {
         setBusy(false);
         openBubble.current = {};
+        planId.current = null; // next turn starts a fresh plan
       },
       onError: (message) => {
         setBusy(false);
@@ -178,7 +202,13 @@ export default function App() {
   }, [onUpdate]);
 
   async function decide(item: AskItem, optionId: string | null, label: string) {
-    await respondPermission(item.req.requestId, optionId).catch(() => {});
+    // Hook-gated requests (the path that fires today) go back through respondHook;
+    // ACP requests through respondPermission. `optionId === "allow"` means approve.
+    if (item.req.hookToolUseId) {
+      await respondHook(item.req.hookToolUseId, optionId === "allow").catch(() => {});
+    } else {
+      await respondPermission(item.req.requestId, optionId).catch(() => {});
+    }
     setItems((prev) => prev.map((i) => (isAsk(i) && i.id === item.id ? { ...i, decided: label } : i)));
   }
 
@@ -344,6 +374,7 @@ export default function App() {
             );
           }
           if (isAsk(i)) return <PermissionCard key={i.id} item={i} onDecide={decide} />;
+          if (isPlan(i)) return <PlanCard key={i.id} entries={i.entries} />;
           return (
             <div key={i.id} className={`bubble ${i.kind}`}>
               {i.text}
@@ -386,8 +417,9 @@ export default function App() {
   );
 }
 
-/// The gate: Grok is blocked on this until the user answers, so nothing lands on
-/// disk behind their back. Diffs render line-by-line when the agent supplies them.
+/// The gate. Our PreToolUse hook holds Grok's tool call open until the user
+/// answers here, so an approved edit is the only one that lands. Best-effort, not
+/// a hard boundary: grok's hook runner fails open if approval times out or errors.
 function PermissionCard({
   item,
   onDecide,
@@ -396,7 +428,9 @@ function PermissionCard({
   onDecide: (i: AskItem, optionId: string | null, label: string) => void;
 }) {
   const { toolCall, options } = item.req;
-  const diffs = (toolCall?.content ?? []).filter((c) => c.type === "diff");
+  const content = toolCall?.content ?? [];
+  const diffs = content.filter((c) => c.type === "diff");
+  const commands = content.filter((c) => c.type === "command");
 
   if (item.decided) {
     return (
@@ -411,10 +445,15 @@ function PermissionCard({
     <div className="ask">
       <div className="ask-head">{toolCall?.title ?? "Grok wants to make a change"}</div>
       {diffs.map((d, n) => (
-        <div className="diff" key={n}>
+        <div className="diff" key={`d${n}`}>
           {d.path && <div className="diff-path">{d.path}</div>}
           <Diff oldText={d.oldText ?? ""} newText={d.newText ?? ""} />
         </div>
+      ))}
+      {commands.map((c, n) => (
+        <pre className="diff-body cmd" key={`c${n}`}>
+          {c.text ?? ""}
+        </pre>
       ))}
       <div className="ask-actions">
         {options.map((o) => (
@@ -427,6 +466,24 @@ function PermissionCard({
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/// The agent's running plan for the turn. Grok resends the whole list as steps
+/// move to in_progress/completed; we render the latest state in place.
+function PlanCard({ entries }: { entries: PlanItem["entries"] }) {
+  if (!entries.length) return null;
+  return (
+    <div className="plan">
+      <div className="plan-head">Plan</div>
+      <ol className="plan-list">
+        {entries.map((e, n) => (
+          <li key={n} className={`plan-step ${e.status ?? ""}`}>
+            {e.content}
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

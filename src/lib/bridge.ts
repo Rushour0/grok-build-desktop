@@ -39,9 +39,14 @@ export const openSession = (cwd: string) => invoke<string>("open_session", { cwd
 export const sendPrompt = (text: string) => invoke<void>("send_prompt", { text });
 export const cancelRun = () => invoke<void>("cancel");
 
-/// Answer an open permission request. `optionId: null` rejects it.
+/// Answer an open ACP permission request. `optionId: null` rejects it.
 export const respondPermission = (requestId: number, optionId: string | null) =>
   invoke<void>("respond_permission", { requestId, optionId });
+
+/// Answer a hook-gated tool call (the default-deny PreToolUse bridge). This is
+/// the path that actually fires today; `respondPermission` is the inert ACP one.
+export const respondHook = (toolUseId: string, allow: boolean) =>
+  invoke<void>("respond_hook", { toolUseId, allow });
 
 // ---- ACP session/update payloads (Rust -> webview) ----
 // Shapes verified against grok 0.2.101's `initialize` response.
@@ -81,11 +86,14 @@ export interface AcpUpdate {
 export interface PermissionRequest {
   requestId: number;
   sessionId?: string;
+  /// Present when the request came from the PreToolUse hook bridge rather than
+  /// ACP. Answer it with `respondHook(hookToolUseId, allow)`, not `respondPermission`.
+  hookToolUseId?: string;
   toolCall?: {
     toolCallId?: string;
     title?: string;
     kind?: string;
-    content?: { type: string; path?: string; oldText?: string; newText?: string }[];
+    content?: { type: string; path?: string; oldText?: string; newText?: string; text?: string }[];
   };
   options: { optionId: string; name: string; kind?: string }[];
 }
