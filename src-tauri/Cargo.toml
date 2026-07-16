@@ -1,6 +1,6 @@
 [package]
 name = "grok-build-desktop"
-version = "0.6.0"
+version = "0.7.0"
 description = "A clean desktop GUI for Grok Build — no terminal required."
 authors = ["Grok Build Desktop contributors"]
 license = "Apache-2.0"

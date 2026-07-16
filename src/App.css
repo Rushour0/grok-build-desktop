@@ -520,6 +520,17 @@ button.tab-add {
   white-space: nowrap;
   max-width: 46ch;
 }
+.bar-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.65rem;
+}
+.usage-total {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
 
 .stream {
   overflow-y: auto;
@@ -686,6 +697,12 @@ button.tab-add {
   color: var(--danger);
   border: 1px solid var(--danger);
   font-size: 0.9rem;
+}
+
+.usage {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  line-height: 1.4;
 }
 
 .tool {
