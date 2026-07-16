@@ -71,8 +71,12 @@ allowlist of safe tools holds where a denylist of dangerous ones does not.
 
 This is meaningful risk reduction, not a hard security boundary. The hook system fails
 open: if the approval process times out or crashes, Grok proceeds. Approval is available
-on **macOS and Linux**; Windows support is a follow-up. **Use this on a folder under
-version control**, so you can always `git diff` and undo.
+on **macOS and Linux**. Windows approval now exists, but is **experimental and not yet
+verified on real Windows** because the maintainer develops on macOS. It fails open like
+the other platforms, so if the hook does not fire you simply get the previous no-approval
+behavior — it cannot make Windows less safe. Windows users: please report whether the
+Allow/Deny prompt appears. **Use this on a folder under version control**, so you can
+always `git diff` and undo.
 
 ## Roadmap
 
@@ -82,10 +86,10 @@ version control**, so you can always `git diff` and undo.
 - [x] Recent projects, read from the CLI's own session store
 - [x] Installers built by CI for macOS / Windows / Linux
 - [x] **Approval before edits** — via a `PreToolUse` hook bridged back to the app
-  (default-deny hook; macOS/Linux; best-effort, fails open)
+  (default-deny hook; macOS/Linux, experimental on Windows; best-effort, fails open)
 - [x] Plan timeline — the agent's plan streams into the transcript as it works
 - [ ] Run history, cost display
-- [ ] Approval on Windows
+- [x] Approval on Windows (experimental, unverified)
 - [ ] Code-signed builds (no Gatekeeper/SmartScreen warning)
 - [ ] Optional `XAI_API_KEY` sign-in for people using API credits
 
