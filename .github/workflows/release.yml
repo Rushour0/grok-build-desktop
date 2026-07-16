@@ -1,8 +1,8 @@
 name: Release
 
 # Push a tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) and this builds
-# real installers for macOS, Windows and Linux, then attaches them to a draft
-# GitHub Release. That draft is what non-technical users end up downloading.
+# real installers for macOS, Windows and Linux, attaches them to a draft GitHub
+# Release, and publishes it only after every platform has finished successfully.
 on:
   push:
     tags:
@@ -10,7 +10,46 @@ on:
   workflow_dispatch:
 
 jobs:
+  validate-version:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches application versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expected_version="${GITHUB_REF_NAME#v}"
+          package_version="$(jq -r '.version' package.json)"
+          tauri_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          cargo_version="$(
+            grep -m 1 -E '^version[[:space:]]*=' src-tauri/Cargo.toml \
+              | grep -oE '"[^"]+"' \
+              | tr -d '"'
+          )"
+
+          mismatch=0
+          for entry in \
+            "package.json:$package_version" \
+            "src-tauri/tauri.conf.json:$tauri_version" \
+            "src-tauri/Cargo.toml:$cargo_version"
+          do
+            file="${entry%%:*}"
+            version="${entry#*:}"
+            if ! grep -qxF "$expected_version" <<< "$version"; then
+              echo "Version mismatch: $file has '$version'; tag '$GITHUB_REF_NAME' requires '$expected_version'." >&2
+              mismatch=1
+            fi
+          done
+
+          exit "$mismatch"
+
   build:
+    needs: validate-version
     permissions:
       contents: write
     strategy:
@@ -70,6 +109,11 @@ jobs:
 
       - run: npm ci
 
+      # Signing is dormant until these secrets exist. Add them in repository
+      # Settings → Secrets to activate it; no code change is needed.
+      # GitHub substitutes an empty string for an unset secret, and tauri-action
+      # treats empty signing configuration as "do not sign", preserving today's
+      # unsigned behavior until the corresponding secrets are populated.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -77,6 +121,22 @@ jobs:
           # installers, but auto-update won't verify and is effectively off.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+          # Apple code signing and notarization are exposed only to macOS legs.
+          APPLE_CERTIFICATE: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          # These three variables trigger notarization only on the macOS legs.
+          APPLE_ID: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_TEAM_ID || '' }}
+
+          # Windows placeholders are likewise restricted to the Windows leg.
+          # Fully activating Windows signing also requires a follow-up change to
+          # bundle.windows.certificateThumbprint/signCommand in tauri.conf.json.
+          WINDOWS_CERTIFICATE: ${{ matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE || '' }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE_THUMBPRINT || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Grok Build Desktop ${{ github.ref_name }}"
@@ -95,9 +155,50 @@ jobs:
             > These builds are not code-signed yet, so macOS Gatekeeper and
             > Windows SmartScreen will warn on first open. On macOS:
             > right-click the app → Open. Signing is on the roadmap.
-          # Published, not a draft — a draft release is invisible to everyone,
-          # which is exactly how v0.1.0 ended up with no visible download.
-          releaseDraft: false
+          # Every matrix leg contributes assets (and its updater entry) to the
+          # same draft. The publish job promotes it only after all legs succeed.
+          releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+
+  publish:
+    name: Publish complete release
+    needs: build
+    if: ${{ success() }}
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Verify updater manifest and publish release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"
+
+          if ! gh release view "$TAG" --json isDraft --jq '.isDraft' | grep -qx true; then
+            echo "Refusing to publish: release '$TAG' is not a draft." >&2
+            exit 1
+          fi
+
+          mkdir release-assets
+          gh release download "$TAG" --pattern latest.json --dir release-assets
+
+          if ! jq -e --arg version "$VERSION" '
+            .version == $version
+            and (.platforms | type == "object")
+            and (.platforms | has("darwin-aarch64"))
+            and (.platforms | has("darwin-x86_64"))
+            and (.platforms | has("linux-x86_64"))
+            and (.platforms | has("windows-x86_64"))
+          ' release-assets/latest.json > /dev/null; then
+            echo "Refusing to publish: latest.json is missing a platform or has the wrong version." >&2
+            exit 1
+          fi
+
+          gh release edit "$TAG" --draft=false
