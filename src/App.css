@@ -110,6 +110,48 @@ button.ghost:hover {
   color: var(--danger);
 }
 
+/* ---- recent projects (sourced from the Grok CLI's session store) ---- */
+
+.recents {
+  margin-top: 1.5rem;
+  width: min(430px, 100%);
+  text-align: left;
+}
+.recents-head {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+  margin-bottom: 0.4rem;
+}
+button.recent {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+}
+button.recent:hover {
+  background: var(--panel);
+  border-color: var(--line);
+}
+button.recent strong {
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+button.recent span {
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 /* ---- chat ---- */
 
 .app {
@@ -138,6 +180,16 @@ button.ghost:hover {
   height: 7px;
   border-radius: 50%;
   background: var(--ok);
+  flex: none;
+}
+.folder .path {
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
 }
 
 .stream {
@@ -152,10 +204,88 @@ button.ghost:hover {
   margin: auto;
   text-align: center;
   color: var(--ink-soft);
+  max-width: 46ch;
 }
-.empty span {
-  font-size: 0.85rem;
+.empty p {
+  margin: 0 0 0.4rem;
+}
+.empty .eg {
+  font-size: 0.82rem;
   opacity: 0.75;
+}
+
+/* ---- permission gate: nothing lands on disk until this is answered ---- */
+
+.ask {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  max-width: 72ch;
+  width: 100%;
+}
+.ask-head {
+  padding: 0.55rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.ask-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+.ask-actions button {
+  font-size: 0.85rem;
+  padding: 0.35em 0.9em;
+}
+.ask.decided {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  width: fit-content;
+}
+.ask.decided .tick {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+}
+
+.diff-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  padding: 0.4rem 0.75rem 0.2rem;
+}
+.diff-body {
+  margin: 0;
+  padding: 0 0.75rem 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.diff-body .add {
+  color: var(--ok);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.diff-body .del {
+  color: var(--danger);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.diff-body .nil {
+  color: var(--ink-soft);
+  font-style: italic;
 }
 
 .bubble {

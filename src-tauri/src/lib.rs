@@ -67,6 +67,14 @@ struct ConnectResult {
     session_id: Option<String>,
 }
 
+#[derive(Serialize)]
+struct Project {
+    path: String,
+    name: String,
+    /// Seconds since the epoch, from the session directory's mtime.
+    last_used: u64,
+}
+
 fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -137,21 +145,6 @@ fn request(
     Ok(rx)
 }
 
-/// Choose the agent-offered permission option that means "yes".
-fn pick_allow_option(params: &Value) -> Option<String> {
-    let opts = params.get("options")?.as_array()?;
-    for o in opts {
-        if let Some(kind) = o.get("kind").and_then(Value::as_str) {
-            if kind.starts_with("allow") {
-                if let Some(id) = o.get("optionId").and_then(Value::as_str) {
-                    return Some(id.to_string());
-                }
-            }
-        }
-    }
-    opts.first()?.get("optionId")?.as_str().map(str::to_string)
-}
-
 /// Pump the agent's stdout: route responses to waiters, forward notifications to the webview.
 fn spawn_reader(app: AppHandle, stdout: ChildStdout, stdin: Arc<Mutex<ChildStdin>>, pending: Pending) {
     thread::spawn(move || {
@@ -196,24 +189,16 @@ fn spawn_reader(app: AppHandle, stdout: ChildStdout, stdin: Arc<Mutex<ChildStdin
                 "session/update" => {
                     let _ = app.emit("acp-update", params);
                 }
-                // The agent wants approval before doing something (e.g. editing a file).
+                // The agent wants approval before touching a file. We deliberately do
+                // NOT answer here: the JSON-RPC request stays open while the user looks
+                // at the diff, and `respond_permission` sends their actual decision.
+                // Nothing is written to disk until they say so.
                 "session/request_permission" => {
-                    let _ = app.emit("acp-permission", params.clone());
-                    // M1: auto-approve so a turn can complete end-to-end.
-                    // M3 replaces this with an interactive Approve/Reject round-trip.
-                    if let Some(id) = msg.get("id") {
-                        let response = match pick_allow_option(&params) {
-                            Some(option_id) => json!({
-                                "jsonrpc": "2.0", "id": id,
-                                "result": {"outcome": {"outcome": "selected", "optionId": option_id}}
-                            }),
-                            None => json!({
-                                "jsonrpc": "2.0", "id": id,
-                                "result": {"outcome": {"outcome": "cancelled"}}
-                            }),
-                        };
-                        let _ = write_msg(&stdin, &response);
+                    let mut payload = params.clone();
+                    if let (Some(obj), Some(id)) = (payload.as_object_mut(), msg.get("id")) {
+                        obj.insert("requestId".into(), id.clone());
                     }
+                    let _ = app.emit("acp-permission", payload);
                 }
                 // Notifications we don't model yet carry no id and need no reply.
                 _ => {
@@ -283,6 +268,66 @@ fn new_session(state: &State<AcpState>, cwd: &str) -> Result<Result<String, Stri
         }
         Err(e) => Ok(Err(e)),
     }
+}
+
+/// Percent-decode a session directory name back into a filesystem path.
+/// The CLI stores each project as `~/.grok/sessions/<percent-encoded cwd>/`.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The projects you've worked on before, read straight out of the Grok CLI's own
+/// session store — we keep no list of our own, so it can never drift from reality.
+#[tauri::command]
+fn recent_projects() -> Vec<Project> {
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(home.join(".grok/sessions")) else {
+        return Vec::new();
+    };
+
+    let mut projects: Vec<Project> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| {
+            let path = percent_decode(&e.file_name().to_string_lossy());
+            // A folder the user has since deleted or moved isn't worth offering.
+            if !std::path::Path::new(&path).is_dir() {
+                return None;
+            }
+            let last_used = e
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let name = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.clone());
+            Some(Project { path, name, last_used })
+        })
+        .collect();
+
+    projects.sort_by(|a, b| b.last_used.cmp(&a.last_used));
+    projects.truncate(8);
+    projects
 }
 
 #[tauri::command]
@@ -449,6 +494,28 @@ fn open_session(state: State<AcpState>, cwd: String) -> Result<String, String> {
     new_session(&state, &cwd)?
 }
 
+/// Answer an open `session/request_permission`. `option_id` of None means "the user
+/// walked away / rejected", which cancels the tool call rather than approving it.
+#[tauri::command]
+fn respond_permission(
+    state: State<AcpState>,
+    request_id: i64,
+    option_id: Option<String>,
+) -> Result<(), String> {
+    let stdin = {
+        let guard = state.inner.lock().map_err(|e| e.to_string())?;
+        guard.as_ref().ok_or("not connected to grok")?.stdin.clone()
+    };
+    let outcome = match option_id {
+        Some(id) => json!({"outcome": "selected", "optionId": id}),
+        None => json!({"outcome": "cancelled"}),
+    };
+    write_msg(
+        &stdin,
+        &json!({"jsonrpc": "2.0", "id": request_id, "result": {"outcome": outcome}}),
+    )
+}
+
 /// Send one user turn. Returns immediately — output arrives as `acp-update` events.
 #[tauri::command]
 fn send_prompt(app: AppHandle, state: State<AcpState>, text: String) -> Result<(), String> {
@@ -508,9 +575,11 @@ pub fn run() {
             grok_installed,
             auth_status,
             install_grok,
+            recent_projects,
             connect,
             authenticate,
             open_session,
+            respond_permission,
             send_prompt,
             cancel
         ])

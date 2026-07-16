@@ -3,19 +3,22 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   authStatus,
   installGrok,
+  recentProjects,
   connect,
   authenticate,
   openSession,
   sendPrompt,
   cancelRun,
+  respondPermission,
   subscribe,
   type AuthMethod,
+  type PermissionRequest,
+  type Project,
   type SessionUpdate,
 } from "./lib/bridge";
 import "./App.css";
 
-// What the user is doing right now. The app is a straight line:
-// setup -> sign in -> pick a folder -> chat.
+// The app is a straight line: setup -> sign in -> pick a folder -> chat.
 type Stage = "checking" | "needs-install" | "installing" | "ready" | "authenticating" | "chat";
 
 interface ToolItem {
@@ -29,9 +32,17 @@ interface TextItem {
   kind: "answer" | "thought" | "you" | "error";
   text: string;
 }
-type Item = ToolItem | TextItem;
+interface AskItem {
+  id: string;
+  kind: "ask";
+  req: PermissionRequest;
+  decided: string | null;
+}
+type Item = ToolItem | TextItem | AskItem;
 
 const isTool = (i: Item): i is ToolItem => i.kind === "tool";
+const isAsk = (i: Item): i is AskItem => i.kind === "ask";
+const isText = (i: Item): i is TextItem => !isTool(i) && !isAsk(i);
 
 function folderName(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean);
@@ -46,10 +57,11 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [recents, setRecents] = useState<Project[]>([]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Chunks stream in one fragment at a time; keep appending to the same bubble
-  // until the turn ends rather than making a bubble per fragment.
+  // until something else happens rather than making a bubble per fragment.
   const openBubble = useRef<{ answer?: string; thought?: string }>({});
 
   useEffect(() => {
@@ -62,10 +74,16 @@ export default function App() {
       .catch(() => setStage("needs-install"));
   }, []);
 
+  // Refresh the recents whenever we're back at the picker — the CLI may have
+  // gained sessions since last time (including from the terminal).
+  useEffect(() => {
+    if (stage === "ready") recentProjects().then(setRecents).catch(() => setRecents([]));
+  }, [stage]);
+
   const appendText = useCallback((kind: TextItem["kind"], id: string, chunk: string) => {
     setItems((prev) => {
       const last = prev[prev.length - 1];
-      if (last && !isTool(last) && last.id === id) {
+      if (last && isText(last) && last.id === id) {
         return [...prev.slice(0, -1), { ...last, text: last.text + chunk }];
       }
       return [...prev, { id, kind, text: chunk }];
@@ -106,7 +124,7 @@ export default function App() {
           break;
         }
         default:
-          break; // plan/user chunks: not surfaced yet
+          break; // plan / user chunks: not surfaced yet
       }
     },
     [appendText],
@@ -115,6 +133,10 @@ export default function App() {
   useEffect(() => {
     const off = subscribe({
       onUpdate,
+      onPermission: (req) => {
+        openBubble.current = {};
+        setItems((prev) => [...prev, { id: `p-${req.requestId}`, kind: "ask", req, decided: null }]);
+      },
       onTurnEnd: () => {
         setBusy(false);
         openBubble.current = {};
@@ -131,6 +153,11 @@ export default function App() {
     };
   }, [onUpdate]);
 
+  async function decide(item: AskItem, optionId: string | null, label: string) {
+    await respondPermission(item.req.requestId, optionId).catch(() => {});
+    setItems((prev) => prev.map((i) => (isAsk(i) && i.id === item.id ? { ...i, decided: label } : i)));
+  }
+
   async function doInstall() {
     setStage("installing");
     setNotice(null);
@@ -143,13 +170,11 @@ export default function App() {
     }
   }
 
-  async function pickFolder() {
-    const picked = await open({ directory: true, multiple: false, title: "Choose a project folder" });
-    if (typeof picked !== "string") return;
+  async function openFolder(path: string) {
     setNotice(null);
     try {
-      const res = await connect(picked);
-      setCwd(picked);
+      const res = await connect(path);
+      setCwd(path);
       if (res.needs_auth) {
         setAuthMethods(res.auth_methods);
         setStage("authenticating");
@@ -159,6 +184,12 @@ export default function App() {
     } catch (e) {
       setNotice(String(e));
     }
+  }
+
+  async function pickFolder() {
+    const picked = await open({ directory: true, multiple: false, title: "Choose a project folder" });
+    if (typeof picked !== "string") return;
+    await openFolder(picked);
   }
 
   async function signIn(methodId: string) {
@@ -188,16 +219,15 @@ export default function App() {
     }
   }
 
-  async function stop() {
+  async function closeFolder() {
     await cancelRun().catch(() => {});
     setBusy(false);
+    setItems([]);
     setStage("ready");
     setCwd(null);
   }
 
-  if (stage === "checking") {
-    return <Splash title="Grok Build Desktop" line="Getting things ready…" />;
-  }
+  if (stage === "checking") return <Splash title="Grok Build Desktop" line="Getting things ready…" />;
 
   if (stage === "needs-install" || stage === "installing") {
     return (
@@ -219,6 +249,17 @@ export default function App() {
         <button className="primary" onClick={pickFolder}>
           Choose a folder…
         </button>
+        {recents.length > 0 && (
+          <div className="recents">
+            <div className="recents-head">Recent</div>
+            {recents.map((p) => (
+              <button key={p.path} className="recent" onClick={() => openFolder(p.path)} title={p.path}>
+                <strong>{p.name}</strong>
+                <span>{p.path}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {notice && <p className="notice error">{notice}</p>}
       </Splash>
     );
@@ -240,35 +281,44 @@ export default function App() {
   return (
     <main className="app">
       <header className="bar">
-        <div className="folder">
+        {/* The full path is the answer to "does it actually know where it's working?" */}
+        <div className="folder" title={cwd ?? ""}>
           <span className="dot" />
-          {cwd ? folderName(cwd) : "—"}
+          <strong>{cwd ? folderName(cwd) : "—"}</strong>
+          <span className="path">{cwd}</span>
         </div>
-        <button className="ghost" onClick={stop}>
+        <button className="ghost" onClick={closeFolder}>
           Close folder
         </button>
       </header>
 
       <div className="stream" ref={scrollRef}>
         {items.length === 0 && (
-          <p className="empty">
-            Tell Grok what you want done in this folder — in plain English.
-            <br />
-            <span>e.g. “add a README explaining what this project does”</span>
-          </p>
+          <div className="empty">
+            <p>
+              Grok can read and edit everything in <strong>{cwd ? folderName(cwd) : "this folder"}</strong>.
+              Tell it what you want done, in plain English.
+            </p>
+            <p className="eg">e.g. “add a README explaining what this project does”</p>
+            <p className="eg">Nothing gets changed on disk until you approve it.</p>
+          </div>
         )}
-        {items.map((i) =>
-          isTool(i) ? (
-            <div key={i.id} className={`tool ${i.status}`}>
-              <span className="tick" />
-              {i.title}
-            </div>
-          ) : (
+        {items.map((i) => {
+          if (isTool(i)) {
+            return (
+              <div key={i.id} className={`tool ${i.status}`}>
+                <span className="tick" />
+                {i.title}
+              </div>
+            );
+          }
+          if (isAsk(i)) return <PermissionCard key={i.id} item={i} onDecide={decide} />;
+          return (
             <div key={i.id} className={`bubble ${i.kind}`}>
               {i.text}
             </div>
-          ),
-        )}
+          );
+        })}
         {busy && (
           <div className="working">
             <span />
@@ -305,15 +355,75 @@ export default function App() {
   );
 }
 
-function Splash({
-  title,
-  line,
-  children,
+/// The gate: Grok is blocked on this until the user answers, so nothing lands on
+/// disk behind their back. Diffs render line-by-line when the agent supplies them.
+function PermissionCard({
+  item,
+  onDecide,
 }: {
-  title: string;
-  line: string;
-  children?: React.ReactNode;
+  item: AskItem;
+  onDecide: (i: AskItem, optionId: string | null, label: string) => void;
 }) {
+  const { toolCall, options } = item.req;
+  const diffs = (toolCall?.content ?? []).filter((c) => c.type === "diff");
+
+  if (item.decided) {
+    return (
+      <div className="ask decided">
+        <span className="tick" />
+        {item.decided} — {toolCall?.title ?? "change"}
+      </div>
+    );
+  }
+
+  return (
+    <div className="ask">
+      <div className="ask-head">{toolCall?.title ?? "Grok wants to make a change"}</div>
+      {diffs.map((d, n) => (
+        <div className="diff" key={n}>
+          {d.path && <div className="diff-path">{d.path}</div>}
+          <Diff oldText={d.oldText ?? ""} newText={d.newText ?? ""} />
+        </div>
+      ))}
+      <div className="ask-actions">
+        {options.map((o) => (
+          <button
+            key={o.optionId}
+            className={String(o.kind).startsWith("allow") ? "primary" : ""}
+            onClick={() => onDecide(item, o.optionId, o.name)}
+          >
+            {o.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/// Deliberately dumb line diff — enough to answer "what is about to change?".
+function Diff({ oldText, newText }: { oldText: string; newText: string }) {
+  const before = oldText ? oldText.split("\n") : [];
+  const after = newText ? newText.split("\n") : [];
+  const removed = before.filter((l) => !after.includes(l));
+  const added = after.filter((l) => !before.includes(l));
+  return (
+    <pre className="diff-body">
+      {removed.map((l, i) => (
+        <div key={`r${i}`} className="del">
+          - {l}
+        </div>
+      ))}
+      {added.map((l, i) => (
+        <div key={`a${i}`} className="add">
+          + {l}
+        </div>
+      ))}
+      {!removed.length && !added.length && <div className="nil">(no textual change)</div>}
+    </pre>
+  );
+}
+
+function Splash({ title, line, children }: { title: string; line: string; children?: React.ReactNode }) {
   return (
     <main className="splash">
       <div className="mark" />
