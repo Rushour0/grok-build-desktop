@@ -109,12 +109,40 @@ jobs:
 
       - run: npm ci
 
-      # Builds are unsigned (no OS code-signing certs yet). Do NOT add empty
-      # APPLE_CERTIFICATE / WINDOWS_CERTIFICATE env vars to "prep" signing: a
-      # referenced-but-unset secret is an EMPTY STRING, not absent, and
-      # tauri-action then tries to import a blank cert and fails codesign on
-      # macOS. When certs exist, wire signing as a SEPARATE step gated by
-      # `if: secrets.APPLE_CERTIFICATE != ''` so the vars are omitted when off.
+      # Apple code signing + notarization — DORMANT until the secrets exist.
+      # This exports the APPLE_* vars to $GITHUB_ENV ONLY when a cert secret is
+      # present, so they are truly ABSENT (not an empty string) otherwise. That
+      # avoids the failure where tauri-action tries to import a blank cert. Add
+      # all six secrets in repo Settings → Secrets to turn signing on; no code
+      # change needed. See SIGNING.md.
+      - name: Enable Apple signing (only when the cert secret is set)
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No APPLE_CERTIFICATE secret — building unsigned (Gatekeeper will warn)."
+            exit 0
+          fi
+          echo "Apple signing secrets present — this build will be signed and notarized."
+          # APPLE_CERTIFICATE is multi-line base64; use the $GITHUB_ENV heredoc form.
+          {
+            echo "APPLE_CERTIFICATE<<__GBD_CERT__"
+            echo "$APPLE_CERTIFICATE"
+            echo "__GBD_CERT__"
+            echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+            echo "APPLE_ID=$APPLE_ID"
+            echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -122,6 +150,8 @@ jobs:
           # these the build still produces installers, but auto-update won't verify.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # APPLE_* are inherited from $GITHUB_ENV, and only when the step above
+          # set them (i.e. the cert secret exists). Absent = unsigned build.
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Grok Build Desktop ${{ github.ref_name }}"

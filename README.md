@@ -13,8 +13,16 @@ click **Sign in**, pick a folder, and type what you want in plain English. No te
 no `npm install`, no API keys to hunt down, no config files.
 
 **[Download the latest release](https://github.com/Rushour0/grok-build-desktop/releases/latest)**
-— macOS, Windows, and Linux installers. Builds are unsigned, so your OS will warn on
-first open. On macOS, right-click the app and choose **Open**.
+— macOS, Windows, and Linux installers. Builds are **unsigned**, so your OS warns on first
+open. On **macOS**, if you see *"Grok Build Desktop is damaged and can't be opened,"* that's
+Gatekeeper rejecting an unsigned download — the app is fine. Drag it to Applications, then run:
+
+```sh
+xattr -cr "/Applications/Grok Build Desktop.app"
+```
+
+and open it. (See [SIGNING.md](SIGNING.md) — signed + notarized builds, which remove this
+step entirely, are coming once code-signing certs are in place.)
 
 > **Status: early.** The app installs the CLI, signs you in, opens a folder, and streams
 > real answers and live tool activity back. See [Known limits](#known-limits) before you
