@@ -115,12 +115,25 @@ export interface PermissionRequest {
   options: { optionId: string; name: string; kind?: string }[];
 }
 
+export interface TurnEnd {
+  stopReason?: string;
+  _meta?: {
+    modelId?: string;
+    totalTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningTokens?: number;
+    cachedReadTokens?: number;
+    usage?: { apiDurationMs?: number };
+  };
+}
+
 // ---- events (Rust -> webview) ----
 
 type Handlers = {
   onUpdate: (tabId: string, u: SessionUpdate) => void;
   onPermission: (tabId: string, req: PermissionRequest) => void;
-  onTurnEnd: (tabId: string, result: { stopReason?: string }) => void;
+  onTurnEnd: (tabId: string, result: TurnEnd) => void;
   onError: (tabId: string, message: string) => void;
   onClosed: (tabId: string) => void;
 };
@@ -134,7 +147,7 @@ export async function subscribe(h: Handlers): Promise<UnlistenFn> {
     listen<PermissionRequest & { tabId: string }>("acp-permission", (e) =>
       e.payload && h.onPermission(e.payload.tabId, e.payload),
     ),
-    listen<{ tabId: string; stopReason?: string }>("acp-turn-end", (e) =>
+    listen<TurnEnd & { tabId: string }>("acp-turn-end", (e) =>
       e.payload && h.onTurnEnd(e.payload.tabId, e.payload),
     ),
     listen<{ tabId: string; message?: string }>("acp-error", (e) =>

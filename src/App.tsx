@@ -52,7 +52,18 @@ interface PlanItem {
   kind: "plan";
   entries: { content: string; status?: string; priority?: string }[];
 }
-type Item = ToolItem | TextItem | AskItem | PlanItem;
+interface UsageItem {
+  id: string;
+  kind: "usage";
+  modelId?: string;
+  totalTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  cachedReadTokens?: number;
+  apiDurationMs?: number;
+}
+type Item = ToolItem | TextItem | AskItem | PlanItem | UsageItem;
 
 interface Tab {
   id: string;
@@ -62,6 +73,7 @@ interface Tab {
   busy: boolean;
   draft: string;
   attachments: string[];
+  usageTokens: number;
   needsAuth: boolean;
   authMethods: AuthMethod[];
 }
@@ -78,6 +90,7 @@ function createTab(): Tab {
     busy: false,
     draft: "",
     attachments: [],
+    usageTokens: 0,
     needsAuth: false,
     authMethods: [],
   };
@@ -90,7 +103,12 @@ function itemId(prefix: string): string {
 const isTool = (i: Item): i is ToolItem => i.kind === "tool";
 const isAsk = (i: Item): i is AskItem => i.kind === "ask";
 const isPlan = (i: Item): i is PlanItem => i.kind === "plan";
-const isText = (i: Item): i is TextItem => !isTool(i) && !isAsk(i) && !isPlan(i);
+const isUsage = (i: Item): i is UsageItem => i.kind === "usage";
+const isText = (i: Item): i is TextItem => !isTool(i) && !isAsk(i) && !isPlan(i) && !isUsage(i);
+
+function isFiniteNumber(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
 
 function folderName(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean);
@@ -483,9 +501,35 @@ export default function App() {
           items: [...tab.items, { id: itemId("p"), kind: "ask", req, decided: null }],
         }));
       },
-      onTurnEnd: (tabId) => {
+      onTurnEnd: (tabId, result) => {
         if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
-        updateTab(tabId, (tab) => ({ ...tab, busy: false }));
+        const meta = result._meta;
+        const hasTokenData = [
+          meta?.totalTokens,
+          meta?.inputTokens,
+          meta?.outputTokens,
+          meta?.reasoningTokens,
+          meta?.cachedReadTokens,
+        ].some(isFiniteNumber);
+        const usageItem: UsageItem | null = hasTokenData
+          ? {
+              id: itemId("usage"),
+              kind: "usage",
+              modelId: meta?.modelId,
+              totalTokens: meta?.totalTokens,
+              inputTokens: meta?.inputTokens,
+              outputTokens: meta?.outputTokens,
+              reasoningTokens: meta?.reasoningTokens,
+              cachedReadTokens: meta?.cachedReadTokens,
+              apiDurationMs: meta?.usage?.apiDurationMs,
+            }
+          : null;
+        updateTab(tabId, (tab) => ({
+          ...tab,
+          busy: false,
+          items: usageItem ? [...tab.items, usageItem] : tab.items,
+          usageTokens: tab.usageTokens + (isFiniteNumber(meta?.totalTokens) ? meta.totalTokens : 0),
+        }));
         openBubbles.current.set(tabId, {});
         planIds.current.set(tabId, null); // next turn starts a fresh plan
         setHistoryRevision((revision) => revision + 1);
@@ -862,9 +906,14 @@ export default function App() {
                       <strong>{folderName(activeTab.cwd)}</strong>
                       <span className="path">{activeTab.cwd}</span>
                     </div>
-                    <button className="ghost" onClick={() => closeTab(activeTab.id)}>
-                      Close tab
-                    </button>
+                    <div className="bar-actions">
+                      {activeTab.usageTokens > 0 && (
+                        <span className="usage-total">· {activeTab.usageTokens.toLocaleString()} tokens</span>
+                      )}
+                      <button className="ghost" onClick={() => closeTab(activeTab.id)}>
+                        Close tab
+                      </button>
+                    </div>
                   </header>
 
                   <div className="stream" ref={scrollRef}>
@@ -1012,12 +1061,32 @@ function TranscriptItems({
     }
     if (isAsk(item)) return <PermissionCard key={item.id} item={item} onDecide={onDecide} />;
     if (isPlan(item)) return <PlanCard key={item.id} entries={item.entries} />;
+    if (isUsage(item)) return <UsageLine key={item.id} item={item} />;
     return (
       <div key={item.id} className={`bubble ${item.kind}`}>
         {item.text}
       </div>
     );
   });
+}
+
+function UsageLine({ item }: { item: UsageItem }) {
+  const breakdown = [
+    isFiniteNumber(item.inputTokens) ? `${item.inputTokens.toLocaleString()} in` : null,
+    isFiniteNumber(item.outputTokens) ? `${item.outputTokens.toLocaleString()} out` : null,
+    isFiniteNumber(item.reasoningTokens) ? `${item.reasoningTokens.toLocaleString()} reasoning` : null,
+    isFiniteNumber(item.cachedReadTokens) ? `${item.cachedReadTokens.toLocaleString()} cached` : null,
+  ].filter((part): part is string => part !== null);
+  const tokenSummary = isFiniteNumber(item.totalTokens)
+    ? `${item.totalTokens.toLocaleString()} tokens${breakdown.length ? ` (${breakdown.join(" · ")})` : ""}`
+    : breakdown.join(" · ");
+  const parts = [
+    item.modelId,
+    tokenSummary,
+    isFiniteNumber(item.apiDurationMs) ? `${(item.apiDurationMs / 1000).toFixed(1)}s` : null,
+  ].filter((part): part is string => Boolean(part));
+
+  return <div className="usage">{parts.join(" · ")}</div>;
 }
 
 /// The gate. Our PreToolUse hook holds Grok's tool call open until the user
