@@ -326,6 +326,7 @@ button.side-row.active strong {
 /* ---- main pane ---- */
 
 .content {
+  position: relative;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -680,15 +681,70 @@ button.transcript-close:hover {
 
 /* ---- composer ---- */
 
+.drop-overlay {
+  position: absolute;
+  z-index: 5;
+  inset: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  background: var(--bg);
+  opacity: 0.92;
+  pointer-events: none;
+}
+
 .composer {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: flex-end;
   padding: 0.75rem;
   border-top: 1px solid var(--line);
   background: var(--panel);
 }
+.attachments {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.attachment-chip {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: min(100%, 28rem);
+  padding: 0.2rem 0.3rem 0.2rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 0.75rem;
+}
+.attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-chip button {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--ink-soft);
+  line-height: 1;
+}
+.attachment-chip button:hover {
+  background: var(--bg);
+  color: var(--ink);
+}
 .composer textarea {
+  min-width: 0;
   flex: 1;
   font: inherit;
   color: var(--ink);
