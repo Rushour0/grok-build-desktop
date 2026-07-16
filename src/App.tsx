@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -60,6 +61,17 @@ const isText = (i: Item): i is TextItem => !isTool(i) && !isAsk(i) && !isPlan(i)
 function folderName(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
+}
+
+export function toMention(cwd: string | null, absPath: string): string {
+  const path = cwd && (absPath === cwd || absPath.startsWith(`${cwd}/`))
+    ? absPath.slice(absPath === cwd ? cwd.length : cwd.length + 1)
+    : absPath;
+  return path.includes(" ") ? `@"${path}"` : `@${path}`;
+}
+
+function isImagePath(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(path);
 }
 
 function reduceUpdates(updates: SessionUpdate[]): Item[] {
@@ -159,6 +171,8 @@ export default function App() {
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [recents, setRecents] = useState<Project[]>([]);
   const [historySessions, setHistorySessions] = useState<SessionMeta[]>([]);
@@ -259,6 +273,40 @@ export default function App() {
       .then((u) => u && setUpdate(u))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (stage !== "chat" || !cwd || historySession) {
+      setDragging(false);
+      return;
+    }
+
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    getCurrentWebview()
+      .onDragDropEvent(({ payload }) => {
+        if (payload.type === "enter" || payload.type === "over") {
+          setDragging(true);
+        } else if (payload.type === "leave") {
+          setDragging(false);
+        } else if (payload.type === "drop") {
+          setDragging(false);
+          setAttachments((current) => [...new Set([...current, ...(payload.paths ?? [])])]);
+        }
+      })
+      .then((stopListening) => {
+        if (cancelled) stopListening();
+        else unlisten = stopListening;
+      })
+      .catch(() => {
+        if (!cancelled) setDragging(false);
+      });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [cwd, historySession, stage]);
 
   async function installUpdate() {
     if (!update) return;
@@ -390,6 +438,8 @@ export default function App() {
     try {
       const res = await connect(path);
       setCwd(path);
+      setAttachments([]);
+      setDragging(false);
       setHistoryRevision((revision) => revision + 1);
       if (res.needs_auth) {
         setAuthMethods(res.auth_methods);
@@ -422,9 +472,12 @@ export default function App() {
   }
 
   async function submit() {
-    const text = draft.trim();
+    const prompt = draft.trim();
+    const mentions = attachments.map((attachment) => toMention(cwd, attachment)).join(" ");
+    const text = prompt && mentions ? `${prompt}\n\n${mentions}` : prompt || mentions;
     if (!text || busy) return;
     setDraft("");
+    setAttachments([]);
     setItems((prev) => [...prev, { id: `u-${Date.now()}`, kind: "you", text }]);
     openBubble.current = {};
     setBusy(true);
@@ -440,6 +493,8 @@ export default function App() {
     await cancelRun().catch(() => {});
     setBusy(false);
     setItems([]);
+    setAttachments([]);
+    setDragging(false);
     setStage("ready");
     setCwd(null);
   }
@@ -567,6 +622,9 @@ export default function App() {
         </aside>
 
         <main className="content">
+          {dragging && stage === "chat" && cwd && !historySession && (
+            <div className="drop-overlay">Drop files to attach</div>
+          )}
           {historySession ? (
             <>
               <header className="content-header">
@@ -637,6 +695,32 @@ export default function App() {
                   submit();
                 }}
               >
+                {attachments.length > 0 && (
+                  <div className="attachments" aria-label="Attached files">
+                    {attachments.map((attachment) => (
+                      <span
+                        className="attachment-chip"
+                        key={attachment}
+                        title={
+                          isImagePath(attachment)
+                            ? "Grok can't view images yet — it'll see the path only"
+                            : attachment
+                        }
+                      >
+                        <span className="attachment-name">{folderName(attachment)}</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAttachments((current) => current.filter((path) => path !== attachment))
+                          }
+                          aria-label={`Remove ${folderName(attachment)}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <textarea
                   value={draft}
                   onChange={(e) => setDraft(e.currentTarget.value)}
@@ -649,7 +733,11 @@ export default function App() {
                   placeholder="What should Grok do?"
                   rows={1}
                 />
-                <button type="submit" className="primary" disabled={busy || !draft.trim()}>
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={busy || (!draft.trim() && attachments.length === 0)}
+                >
                   {busy ? "Working…" : "Send"}
                 </button>
               </form>
