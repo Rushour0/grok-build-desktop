@@ -33,6 +33,7 @@ use tauri::{AppHandle, Emitter, State};
 type Pending = Arc<Mutex<HashMap<i64, mpsc::Sender<Result<Value, String>>>>>;
 
 struct Session {
+    tab_id: String,
     child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
     /// None until `session/new` succeeds — auth may be required first.
@@ -58,7 +59,7 @@ impl Session {
 
 #[derive(Default)]
 struct AcpState {
-    inner: Mutex<Option<Session>>,
+    inner: Mutex<HashMap<String, Session>>,
 }
 
 #[derive(Serialize)]
@@ -146,6 +147,15 @@ fn write_msg(stdin: &Arc<Mutex<ChildStdin>>, msg: &Value) -> Result<(), String> 
     Ok(())
 }
 
+fn with_tab_id(mut payload: Value, tab_id: &str) -> Value {
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("tabId".into(), Value::String(tab_id.to_string()));
+        payload
+    } else {
+        json!({"tabId": tab_id, "payload": payload})
+    }
+}
+
 /// Send a client->agent request and hand back the channel its response will arrive on.
 fn request(
     stdin: &Arc<Mutex<ChildStdin>>,
@@ -165,7 +175,13 @@ fn request(
 }
 
 /// Pump the agent's stdout: route responses to waiters, forward notifications to the webview.
-fn spawn_reader(app: AppHandle, stdout: ChildStdout, stdin: Arc<Mutex<ChildStdin>>, pending: Pending) {
+fn spawn_reader(
+    app: AppHandle,
+    tab_id: String,
+    stdout: ChildStdout,
+    stdin: Arc<Mutex<ChildStdin>>,
+    pending: Pending,
+) {
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
             let line = match line {
@@ -206,7 +222,7 @@ fn spawn_reader(app: AppHandle, stdout: ChildStdout, stdin: Arc<Mutex<ChildStdin
                 // The live stream: agent_message_chunk / agent_thought_chunk / tool_call /
                 // tool_call_update / plan. The webview decides how to render each.
                 "session/update" => {
-                    let _ = app.emit("acp-update", params);
+                    let _ = app.emit("acp-update", with_tab_id(params, &tab_id));
                 }
                 // The ACP way to ask for approval. In practice grok 0.2.101 never
                 // sends this over `agent stdio` (verified), so this path is inert —
@@ -218,7 +234,7 @@ fn spawn_reader(app: AppHandle, stdout: ChildStdout, stdin: Arc<Mutex<ChildStdin
                     if let (Some(obj), Some(id)) = (payload.as_object_mut(), msg.get("id")) {
                         obj.insert("requestId".into(), id.clone());
                     }
-                    let _ = app.emit("acp-permission", payload);
+                    let _ = app.emit("acp-permission", with_tab_id(payload, &tab_id));
                 }
                 // Notifications we don't model yet carry no id and need no reply.
                 _ => {
@@ -234,16 +250,19 @@ fn spawn_reader(app: AppHandle, stdout: ChildStdout, stdin: Arc<Mutex<ChildStdin
                 }
             }
         }
-        let _ = app.emit("acp-closed", json!({"reason": "grok stopped"}));
+        let _ = app.emit(
+            "acp-closed",
+            json!({"tabId": tab_id, "reason": "grok stopped"}),
+        );
     });
 }
 
 /// Drain stderr so a chatty agent can't fill the pipe buffer and wedge itself.
-fn spawn_stderr_drain(app: AppHandle, stderr: ChildStderr) {
+fn spawn_stderr_drain(app: AppHandle, tab_id: String, stderr: ChildStderr) {
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if !line.trim().is_empty() {
-                let _ = app.emit("acp-stderr", json!({ "line": line }));
+                let _ = app.emit("acp-stderr", json!({"tabId": tab_id, "line": line}));
             }
         }
     });
@@ -342,14 +361,6 @@ fn bridge_root() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".grok/gbd-bridge"))
 }
 
-fn clear_dir(dir: &std::path::Path) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for e in entries.flatten() {
-            let _ = std::fs::remove_file(e.path());
-        }
-    }
-}
-
 fn basename(path: &str) -> String {
     path.rsplit(['/', '\\']).next().filter(|s| !s.is_empty()).unwrap_or(path).to_string()
 }
@@ -384,7 +395,7 @@ fn install_approval_hook() -> Result<(), String> {
 /// renders (PermissionCard). Mutating tools get a diff or command preview.
 /// `tuid` is the request file's stem — the identity the hook script polls on, so
 /// the answer always routes back even when the JSON `toolUseId` is absent.
-fn build_permission_payload(req: &Value, tuid: &str) -> Value {
+fn build_permission_payload(req: &Value, tuid: &str, tab_id: &str) -> Value {
     let tool = req.get("toolName").and_then(Value::as_str).unwrap_or("");
     let input = req.get("toolInput").cloned().unwrap_or(Value::Null);
     let s = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or("").to_string();
@@ -409,6 +420,7 @@ fn build_permission_payload(req: &Value, tuid: &str) -> Value {
     };
 
     json!({
+        "tabId": tab_id,
         "requestId": 0,
         "hookToolUseId": tuid,
         "toolCall": {"title": title, "content": content},
@@ -419,23 +431,19 @@ fn build_permission_payload(req: &Value, tuid: &str) -> Value {
     })
 }
 
-/// Prepare the bridge for a freshly-opened session: clear stale requests, install
-/// the hook, mark this session live, and start watching for approval requests.
-fn start_approval(app: &AppHandle, session_id: &str, stop: Arc<AtomicBool>) {
+/// Prepare the bridge for a freshly-opened session: install the hook, mark this
+/// session live, and start its tab-scoped approval watcher. Other sessions' bridge
+/// files and live markers must remain intact while their tabs are connected.
+fn start_approval(app: &AppHandle, tab_id: &str, session_id: &str, stop: Arc<AtomicBool>) {
     let Some(root) = bridge_root() else { return };
     for sub in ["req", "resp", "live"] {
         let _ = std::fs::create_dir_all(root.join(sub));
     }
-    // A new session starts with a clean slate — never inherit a prior run's
-    // requests, and sweep any live markers a crash left behind (only one app
-    // session is ever active, so every other marker is stale).
-    clear_dir(&root.join("req"));
-    clear_dir(&root.join("resp"));
-    clear_dir(&root.join("live"));
     let _ = install_approval_hook(); // idempotent; also installed pre-spawn in connect()
     let _ = std::fs::write(root.join("live").join(session_id), b"1");
 
     let app = app.clone();
+    let tab_id = tab_id.to_string();
     let session_id = session_id.to_string();
     thread::spawn(move || {
         let req_dir = root.join("req");
@@ -468,7 +476,10 @@ fn start_approval(app: &AppHandle, session_id: &str, stop: Arc<AtomicBool>) {
                         let _ = write_decision(&stem, true);
                         continue;
                     }
-                    let _ = app.emit("acp-permission", build_permission_payload(&reqv, &stem));
+                    let _ = app.emit(
+                        "acp-permission",
+                        build_permission_payload(&reqv, &stem, &tab_id),
+                    );
                 }
             }
             thread::sleep(Duration::from_millis(200));
@@ -494,7 +505,8 @@ fn write_decision(tool_use_id: &str, allow: bool) -> Result<(), String> {
 
 /// Answer a hook-gated tool call from the webview (Allow/Deny).
 #[tauri::command]
-fn respond_hook(tool_use_id: String, allow: bool) -> Result<(), String> {
+fn respond_hook(tab_id: String, tool_use_id: String, allow: bool) -> Result<(), String> {
+    let _ = tab_id;
     write_decision(&tool_use_id, allow)
 }
 
@@ -502,12 +514,18 @@ fn respond_hook(tool_use_id: String, allow: bool) -> Result<(), String> {
 fn new_session(
     app: &AppHandle,
     state: &State<AcpState>,
+    tab_id: &str,
     cwd: &str,
 ) -> Result<Result<String, String>, String> {
-    let (stdin, pending, next_id) = {
+    let (stdin, pending, next_id, session_tab_id) = {
         let guard = state.inner.lock().map_err(|e| e.to_string())?;
-        let s = guard.as_ref().ok_or("not connected to grok")?;
-        (s.stdin.clone(), s.pending.clone(), s.next_id.clone())
+        let s = guard.get(tab_id).ok_or("not connected to grok")?;
+        (
+            s.stdin.clone(),
+            s.pending.clone(),
+            s.next_id.clone(),
+            s.tab_id.clone(),
+        )
     };
     let rx = request(
         &stdin,
@@ -528,7 +546,7 @@ fn new_session(
                 .ok_or("grok didn't return a sessionId")?
                 .to_string();
             let stop = if let Ok(mut guard) = state.inner.lock() {
-                guard.as_mut().map(|s| {
+                guard.get_mut(tab_id).map(|s| {
                     s.session_id = Some(id.clone());
                     s.approval_stop.clone()
                 })
@@ -537,7 +555,7 @@ fn new_session(
             };
             // Arm the approval gate for this session before the user can prompt.
             if let Some(stop) = stop {
-                start_approval(app, &id, stop);
+                start_approval(app, &session_tab_id, &id, stop);
             }
             Ok(Ok(id))
         }
@@ -841,11 +859,19 @@ fn install_grok(app: AppHandle) -> Result<String, String> {
 /// Spawn `grok agent stdio` in `cwd`, do the ACP handshake, and try to open a session.
 /// If the agent demands sign-in, report that instead of failing — the UI drives `authenticate`.
 #[tauri::command]
-fn connect(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<ConnectResult, String> {
-    if let Ok(mut g) = state.inner.lock() {
-        if let Some(existing) = g.take() {
-            existing.kill();
-        }
+fn connect(
+    app: AppHandle,
+    state: State<AcpState>,
+    tab_id: String,
+    cwd: String,
+) -> Result<ConnectResult, String> {
+    let existing = state
+        .inner
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&tab_id);
+    if let Some(existing) = existing {
+        existing.kill();
     }
 
     let grok = resolve_grok().ok_or(
@@ -869,12 +895,18 @@ fn connect(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<Connec
     let stdin = Arc::new(Mutex::new(child.stdin.take().ok_or("grok gave us no stdin")?));
     let stdout = child.stdout.take().ok_or("grok gave us no stdout")?;
     if let Some(stderr) = child.stderr.take() {
-        spawn_stderr_drain(app.clone(), stderr);
+        spawn_stderr_drain(app.clone(), tab_id.clone(), stderr);
     }
 
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     let next_id = Arc::new(AtomicI64::new(1));
-    spawn_reader(app.clone(), stdout, stdin.clone(), pending.clone());
+    spawn_reader(
+        app.clone(),
+        tab_id.clone(),
+        stdout,
+        stdin.clone(),
+        pending.clone(),
+    );
 
     // We don't advertise fs capabilities: grok uses its own file tools rather than
     // asking us to read/write on its behalf. It does NOT ask permission over ACP —
@@ -899,17 +931,21 @@ fn connect(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<Connec
         .cloned()
         .unwrap_or_default();
 
-    *state.inner.lock().map_err(|e| e.to_string())? = Some(Session {
-        child,
-        stdin,
-        session_id: None,
-        next_id,
-        pending,
-        approval_stop: Arc::new(AtomicBool::new(false)),
-    });
+    state.inner.lock().map_err(|e| e.to_string())?.insert(
+        tab_id.clone(),
+        Session {
+            tab_id: tab_id.clone(),
+            child,
+            stdin,
+            session_id: None,
+            next_id,
+            pending,
+            approval_stop: Arc::new(AtomicBool::new(false)),
+        },
+    );
 
     // Try for a session; a fresh install will bounce us to sign-in instead.
-    match new_session(&app, &state, &cwd)? {
+    match new_session(&app, &state, &tab_id, &cwd)? {
         Ok(session_id) => Ok(ConnectResult {
             needs_auth: false,
             auth_methods,
@@ -926,10 +962,10 @@ fn connect(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<Connec
 
 /// Run the agent's sign-in flow (opens the browser). Blocks until the user finishes.
 #[tauri::command]
-fn authenticate(state: State<AcpState>, method_id: String) -> Result<(), String> {
+fn authenticate(state: State<AcpState>, tab_id: String, method_id: String) -> Result<(), String> {
     let (stdin, pending, next_id) = {
         let guard = state.inner.lock().map_err(|e| e.to_string())?;
-        let s = guard.as_ref().ok_or("not connected to grok")?;
+        let s = guard.get(&tab_id).ok_or("not connected to grok")?;
         (s.stdin.clone(), s.pending.clone(), s.next_id.clone())
     };
     let rx = request(
@@ -947,8 +983,13 @@ fn authenticate(state: State<AcpState>, method_id: String) -> Result<(), String>
 
 /// Open a session after a successful sign-in.
 #[tauri::command]
-fn open_session(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<String, String> {
-    new_session(&app, &state, &cwd)?
+fn open_session(
+    app: AppHandle,
+    state: State<AcpState>,
+    tab_id: String,
+    cwd: String,
+) -> Result<String, String> {
+    new_session(&app, &state, &tab_id, &cwd)?
 }
 
 /// Answer an open `session/request_permission`. `option_id` of None means "the user
@@ -956,12 +997,17 @@ fn open_session(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<S
 #[tauri::command]
 fn respond_permission(
     state: State<AcpState>,
+    tab_id: String,
     request_id: i64,
     option_id: Option<String>,
 ) -> Result<(), String> {
     let stdin = {
         let guard = state.inner.lock().map_err(|e| e.to_string())?;
-        guard.as_ref().ok_or("not connected to grok")?.stdin.clone()
+        guard
+            .get(&tab_id)
+            .ok_or("not connected to grok")?
+            .stdin
+            .clone()
     };
     let outcome = match option_id {
         Some(id) => json!({"outcome": "selected", "optionId": id}),
@@ -975,10 +1021,17 @@ fn respond_permission(
 
 /// Send one user turn. Returns immediately — output arrives as `acp-update` events.
 #[tauri::command]
-fn send_prompt(app: AppHandle, state: State<AcpState>, text: String) -> Result<(), String> {
+fn send_prompt(
+    app: AppHandle,
+    state: State<AcpState>,
+    tab_id: String,
+    text: String,
+) -> Result<(), String> {
     let (stdin, pending, next_id, session_id) = {
         let guard = state.inner.lock().map_err(|e| e.to_string())?;
-        let s = guard.as_ref().ok_or("No folder open yet — pick a project folder first.")?;
+        let s = guard
+            .get(&tab_id)
+            .ok_or("No folder open yet — pick a project folder first.")?;
         let id = s
             .session_id
             .clone()
@@ -1001,14 +1054,18 @@ fn send_prompt(app: AppHandle, state: State<AcpState>, text: String) -> Result<(
             Ok(Err(e)) => ("acp-error", json!({"message": e})),
             Err(_) => ("acp-error", json!({"message": "grok stopped responding"})),
         };
-        let _ = app.emit(event, payload);
+        let _ = app.emit(event, with_tab_id(payload, &tab_id));
     });
     Ok(())
 }
 
 #[tauri::command]
-fn cancel(state: State<AcpState>) -> Result<(), String> {
-    let session = state.inner.lock().map_err(|e| e.to_string())?.take();
+fn cancel(state: State<AcpState>, tab_id: String) -> Result<(), String> {
+    let session = state
+        .inner
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&tab_id);
     if let Some(s) = session {
         if let Some(id) = s.session_id.clone() {
             // Best-effort protocol cancel, then make sure the process is really gone.
