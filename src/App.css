@@ -188,23 +188,240 @@ button.recent span {
   max-width: 100%;
 }
 
-/* ---- chat ---- */
+/* ---- working shell ---- */
 
-.app {
+.shell {
   height: 100vh;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
 }
+.shell > .update {
+  flex: none;
+}
+.shell-body {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ---- conversation sidebar ---- */
+
+.sidebar {
+  width: 260px;
+  min-height: 0;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+.sidebar-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.sidebar-brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0 0.15rem;
+  font-size: 0.92rem;
+}
+.sidebar-brand .mark {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border-radius: 5px;
+  background: var(--accent);
+}
+button.new-chat {
+  width: 100%;
+}
+.side-search {
+  width: 100%;
+  margin-top: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: var(--bg);
+  outline: none;
+}
+.side-search::placeholder {
+  color: var(--ink-soft);
+}
+.side-search:focus {
+  border-color: var(--ink-soft);
+}
+.side-list {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-top: 0.65rem;
+  padding-right: 0.1rem;
+  overflow-y: auto;
+}
+button.side-row {
+  width: 100%;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.08rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+}
+button.side-row:hover {
+  background: var(--bg);
+}
+button.side-row.active {
+  background: var(--bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+button.side-row strong {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  font-size: 0.85rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button.side-row.active strong {
+  font-weight: 600;
+}
+.side-row-meta {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.side-state {
+  padding: 0.55rem 0.65rem;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+}
+.side-state.error {
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+/* ---- main pane ---- */
+
+.content {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  background: var(--bg);
+}
+.content > .stream {
+  min-height: 0;
+  flex: 1;
+}
+.content-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+}
+.content-title {
+  min-width: 0;
+}
+.content-title h1 {
+  margin: 0;
+  overflow: hidden;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.content-title span {
+  display: block;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button.transcript-close {
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  padding: 0;
+  border-color: transparent;
+  color: var(--ink-soft);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+button.transcript-close:hover {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--ink);
+}
+.history-state {
+  margin: auto;
+  padding: 2rem;
+  color: var(--ink-soft);
+  text-align: center;
+}
+.history-state.error {
+  color: var(--danger);
+}
+.content-empty {
+  min-height: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  text-align: center;
+}
+.content-empty h1 {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+.content-empty > p {
+  margin: 0.3rem 0 1rem;
+  color: var(--ink-soft);
+}
+
+/* ---- live chat ---- */
 
 .bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 1rem;
   padding: 0.6rem 0.9rem;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
 .folder {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -486,4 +703,11 @@ button.recent span {
 }
 .composer textarea:focus {
   border-color: var(--ink-soft);
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }

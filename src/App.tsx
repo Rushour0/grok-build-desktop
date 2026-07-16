@@ -6,6 +6,9 @@ import {
   authStatus,
   installGrok,
   recentProjects,
+  listSessions,
+  loadSessionUpdates,
+  searchSessions,
   connect,
   authenticate,
   openSession,
@@ -17,6 +20,7 @@ import {
   type AuthMethod,
   type PermissionRequest,
   type Project,
+  type SessionMeta,
   type SessionUpdate,
 } from "./lib/bridge";
 import "./App.css";
@@ -58,6 +62,96 @@ function folderName(path: string): string {
   return parts[parts.length - 1] ?? path;
 }
 
+function reduceUpdates(updates: SessionUpdate[]): Item[] {
+  type Reduction = {
+    items: Item[];
+    answerId?: string;
+    thoughtId?: string;
+  };
+
+  return updates.reduce<Reduction>(
+    (state, update, index) => {
+      switch (update.sessionUpdate) {
+        case "agent_message_chunk": {
+          const id = state.answerId ?? `ans-${index}`;
+          const text = update.content?.text ?? "";
+          const exists = state.items.some((item) => isText(item) && item.id === id);
+          return {
+            ...state,
+            answerId: id,
+            items: exists
+              ? state.items.map((item) =>
+                  isText(item) && item.id === id ? { ...item, text: item.text + text } : item,
+                )
+              : [...state.items, { id, kind: "answer", text }],
+          };
+        }
+        case "agent_thought_chunk": {
+          const id = state.thoughtId ?? `th-${index}`;
+          const text = update.content?.text ?? "";
+          const exists = state.items.some((item) => isText(item) && item.id === id);
+          return {
+            ...state,
+            thoughtId: id,
+            items: exists
+              ? state.items.map((item) =>
+                  isText(item) && item.id === id ? { ...item, text: item.text + text } : item,
+                )
+              : [...state.items, { id, kind: "thought", text }],
+          };
+        }
+        case "user_message_chunk":
+          return {
+            items: [
+              ...state.items,
+              { id: `you-${index}`, kind: "you", text: update.content?.text ?? "" },
+            ],
+          };
+        case "tool_call":
+          return {
+            items: [
+              ...state.items,
+              {
+                id: update.toolCallId ?? `tool-${index}`,
+                kind: "tool",
+                title: update.title ?? update.kind ?? "Working",
+                status: update.status ?? "completed",
+              },
+            ],
+          };
+        case "tool_call_update":
+          return {
+            ...state,
+            items: state.items.map((item) =>
+              isTool(item) && item.id === update.toolCallId
+                ? {
+                    ...item,
+                    status: update.status ?? item.status,
+                    title: update.title ?? item.title,
+                  }
+                : item,
+            ),
+          };
+        case "plan": {
+          const plan: PlanItem = { id: "plan", kind: "plan", entries: update.entries ?? [] };
+          const hasPlan = state.items.some(isPlan);
+          return {
+            items: hasPlan ? state.items.map((item) => (isPlan(item) ? plan : item)) : [...state.items, plan],
+          };
+        }
+        default:
+          return state;
+      }
+    },
+    { items: [] },
+  ).items;
+}
+
+function sessionDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+}
+
 export default function App() {
   const [stage, setStage] = useState<Stage>("checking");
   const [cwd, setCwd] = useState<string | null>(null);
@@ -67,10 +161,22 @@ export default function App() {
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [recents, setRecents] = useState<Project[]>([]);
+  const [historySessions, setHistorySessions] = useState<SessionMeta[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historySearchIds, setHistorySearchIds] = useState<string[]>([]);
+  const [historySearching, setHistorySearching] = useState(false);
+  const [historySession, setHistorySession] = useState<SessionMeta | null>(null);
+  const [historyItems, setHistoryItems] = useState<Item[]>([]);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyListError, setHistoryListError] = useState<string | null>(null);
+  const [historyRevision, setHistoryRevision] = useState(0);
   const [update, setUpdate] = useState<Update | null>(null);
   const [updating, setUpdating] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const transcriptRequest = useRef(0);
   // Chunks stream in one fragment at a time; keep appending to the same bubble
   // until something else happens rather than making a bubble per fragment.
   const openBubble = useRef<{ answer?: string; thought?: string }>({});
@@ -79,7 +185,7 @@ export default function App() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [items, busy]);
+  }, [items, busy, historySession]);
 
   useEffect(() => {
     authStatus()
@@ -92,6 +198,59 @@ export default function App() {
   useEffect(() => {
     if (stage === "ready") recentProjects().then(setRecents).catch(() => setRecents([]));
   }, [stage]);
+
+  useEffect(() => {
+    if (stage !== "ready" && stage !== "chat") return;
+    let cancelled = false;
+    setHistoryLoading(true);
+    setHistoryListError(null);
+    listSessions()
+      .then((sessions) => {
+        if (!cancelled) setHistorySessions(sessions);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setHistorySessions([]);
+          setHistoryListError(String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [stage, historyRevision]);
+
+  useEffect(() => {
+    if (stage !== "ready" && stage !== "chat") return;
+    const query = historyQuery.trim();
+    setHistorySearchIds([]);
+    if (!query) {
+      setHistorySearching(false);
+      return;
+    }
+
+    let cancelled = false;
+    setHistorySearching(true);
+    const timer = window.setTimeout(() => {
+      searchSessions(query)
+        .then((ids) => {
+          if (!cancelled) setHistorySearchIds(ids);
+        })
+        .catch(() => {
+          if (!cancelled) setHistorySearchIds([]);
+        })
+        .finally(() => {
+          if (!cancelled) setHistorySearching(false);
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [historyQuery, stage]);
 
   // Offer updates rather than forcing them: an agent mid-task shouldn't be
   // restarted out from under the user. `check()` is a no-op in dev.
@@ -188,6 +347,7 @@ export default function App() {
         setBusy(false);
         openBubble.current = {};
         planId.current = null; // next turn starts a fresh plan
+        setHistoryRevision((revision) => revision + 1);
       },
       onError: (message) => {
         setBusy(false);
@@ -225,10 +385,12 @@ export default function App() {
   }
 
   async function openFolder(path: string) {
+    closeTranscript();
     setNotice(null);
     try {
       const res = await connect(path);
       setCwd(path);
+      setHistoryRevision((revision) => revision + 1);
       if (res.needs_auth) {
         setAuthMethods(res.auth_methods);
         setStage("authenticating");
@@ -241,6 +403,7 @@ export default function App() {
   }
 
   async function pickFolder() {
+    closeTranscript();
     const picked = await open({ directory: true, multiple: false, title: "Choose a project folder" });
     if (typeof picked !== "string") return;
     await openFolder(picked);
@@ -281,6 +444,30 @@ export default function App() {
     setCwd(null);
   }
 
+  async function viewSession(session: SessionMeta) {
+    const request = ++transcriptRequest.current;
+    setHistorySession(session);
+    setHistoryItems([]);
+    setTranscriptLoading(true);
+    setHistoryError(null);
+    try {
+      const updates = await loadSessionUpdates(session.cwd, session.id);
+      if (transcriptRequest.current === request) setHistoryItems(reduceUpdates(updates));
+    } catch (error) {
+      if (transcriptRequest.current === request) setHistoryError(String(error));
+    } finally {
+      if (transcriptRequest.current === request) setTranscriptLoading(false);
+    }
+  }
+
+  function closeTranscript() {
+    transcriptRequest.current += 1;
+    setHistorySession(null);
+    setHistoryItems([]);
+    setTranscriptLoading(false);
+    setHistoryError(null);
+  }
+
   const banner = update ? (
     <UpdateBanner update={update} busy={updating} onInstall={installUpdate} />
   ) : null;
@@ -302,28 +489,6 @@ export default function App() {
     );
   }
 
-  if (stage === "ready") {
-    return (
-      <Splash banner={banner} title="Grok Build Desktop" line="Pick the project folder you want to work on.">
-        <button className="primary" onClick={pickFolder}>
-          Choose a folder…
-        </button>
-        {recents.length > 0 && (
-          <div className="recents">
-            <div className="recents-head">Recent</div>
-            {recents.map((p) => (
-              <button key={p.path} className="recent" onClick={() => openFolder(p.path)} title={p.path}>
-                <strong>{p.name}</strong>
-                <span>{p.path}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        {notice && <p className="notice error">{notice}</p>}
-      </Splash>
-    );
-  }
-
   if (stage === "authenticating") {
     return (
       <Splash banner={banner} title="Sign in to continue" line="Grok needs you signed in before it can work on your project.">
@@ -337,84 +502,209 @@ export default function App() {
     );
   }
 
+  const query = historyQuery.trim().toLocaleLowerCase();
+  const contentMatches = new Set(historySearchIds);
+  const filteredSessions = query
+    ? historySessions.filter(
+        (session) =>
+          session.title.toLocaleLowerCase().includes(query) ||
+          session.summary.toLocaleLowerCase().includes(query) ||
+          contentMatches.has(session.id),
+      )
+    : historySessions;
+
   return (
-    <main className="app">
+    <div className="shell">
       {banner}
-      <header className="bar">
-        {/* The full path is the answer to "does it actually know where it's working?" */}
-        <div className="folder" title={cwd ?? ""}>
-          <span className="dot" />
-          <strong>{cwd ? folderName(cwd) : "—"}</strong>
-          <span className="path">{cwd}</span>
-        </div>
-        <button className="ghost" onClick={closeFolder}>
-          Close folder
-        </button>
-      </header>
-
-      <div className="stream" ref={scrollRef}>
-        {items.length === 0 && (
-          <div className="empty">
-            <p>
-              Grok can read and edit everything in <strong>{cwd ? folderName(cwd) : "this folder"}</strong>.
-              Tell it what you want done, in plain English.
-            </p>
-            <p className="eg">e.g. “add a README explaining what this project does”</p>
-            {/* Be straight about this: Grok's agent mode applies edits itself. */}
-            <p className="eg warn">Grok can change files here on its own. Use a folder you can undo — ideally one in git.</p>
-          </div>
-        )}
-        {items.map((i) => {
-          if (isTool(i)) {
-            return (
-              <div key={i.id} className={`tool ${i.status}`}>
-                <span className="tick" />
-                {i.title}
-              </div>
-            );
-          }
-          if (isAsk(i)) return <PermissionCard key={i.id} item={i} onDecide={decide} />;
-          if (isPlan(i)) return <PlanCard key={i.id} entries={i.entries} />;
-          return (
-            <div key={i.id} className={`bubble ${i.kind}`}>
-              {i.text}
+      <div className="shell-body">
+        <aside className="sidebar">
+          <div className="sidebar-head">
+            <div className="sidebar-brand">
+              <span className="mark" />
+              <strong>Grok Build</strong>
             </div>
-          );
-        })}
-        {busy && (
-          <div className="working">
-            <span />
-            <span />
-            <span />
+            <button className="new-chat primary" onClick={pickFolder}>
+              New chat
+            </button>
           </div>
-        )}
-      </div>
+          <input
+            className="side-search"
+            type="search"
+            value={historyQuery}
+            onChange={(event) => setHistoryQuery(event.currentTarget.value)}
+            placeholder="Search conversations"
+            aria-label="Search conversations"
+          />
+          <div className="side-list">
+            {historyLoading && historySessions.length === 0 && (
+              <div className="side-state">Loading conversations…</div>
+            )}
+            {!historyLoading && historyListError && <div className="side-state error">{historyListError}</div>}
+            {(!historyLoading || historySessions.length > 0) &&
+              !historyListError &&
+              filteredSessions.length === 0 && (
+                <div className="side-state">
+                  {query ? (historySearching ? "Searching…" : "No matches") : "No conversations yet"}
+                </div>
+              )}
+            {(!historyLoading || historySessions.length > 0) &&
+              !historyListError &&
+              filteredSessions.map((session) => (
+                <button
+                  key={session.id}
+                  className={`side-row${historySession?.id === session.id ? " active" : ""}`}
+                  onClick={() => viewSession(session)}
+                  title={session.cwd}
+                  aria-current={historySession?.id === session.id ? "page" : undefined}
+                >
+                  <strong>{session.title || "Untitled conversation"}</strong>
+                  <span className="side-row-meta">
+                    {folderName(session.cwd)} · {sessionDate(session.updated_at)}
+                  </span>
+                </button>
+              ))}
+          </div>
+        </aside>
 
-      <form
-        className="composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          submit();
-        }}
-      >
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              submit();
-            }
-          }}
-          placeholder="What should Grok do?"
-          rows={1}
-        />
-        <button type="submit" className="primary" disabled={busy || !draft.trim()}>
-          {busy ? "Working…" : "Send"}
-        </button>
-      </form>
-    </main>
+        <main className="content">
+          {historySession ? (
+            <>
+              <header className="content-header">
+                <div className="content-title">
+                  <h1>{historySession.title || "Untitled conversation"}</h1>
+                  <span title={historySession.cwd}>{folderName(historySession.cwd)}</span>
+                </div>
+                <button
+                  className="transcript-close"
+                  onClick={closeTranscript}
+                  aria-label="Close transcript"
+                  title="Close transcript"
+                >
+                  ×
+                </button>
+              </header>
+              <div className="stream">
+                {transcriptLoading && <div className="history-state">Loading conversation…</div>}
+                {!transcriptLoading && historyError && <div className="history-state error">{historyError}</div>}
+                {!transcriptLoading && !historyError && historyItems.length === 0 && (
+                  <div className="history-state">This conversation has no messages.</div>
+                )}
+                <TranscriptItems items={historyItems} />
+              </div>
+            </>
+          ) : stage === "chat" && cwd ? (
+            <>
+              <header className="bar">
+                {/* The full path is the answer to "does it actually know where it's working?" */}
+                <div className="folder" title={cwd}>
+                  <span className="dot" />
+                  <strong>{folderName(cwd)}</strong>
+                  <span className="path">{cwd}</span>
+                </div>
+                <button className="ghost" onClick={closeFolder}>
+                  Close folder
+                </button>
+              </header>
+
+              <div className="stream" ref={scrollRef}>
+                {items.length === 0 && (
+                  <div className="empty">
+                    <p>
+                      Grok can read and edit everything in <strong>{folderName(cwd)}</strong>. Tell it what you want
+                      done, in plain English.
+                    </p>
+                    <p className="eg">e.g. “add a README explaining what this project does”</p>
+                    {/* Be straight about this: Grok's agent mode applies edits itself. */}
+                    <p className="eg warn">
+                      Grok can change files here on its own. Use a folder you can undo — ideally one in git.
+                    </p>
+                  </div>
+                )}
+                <TranscriptItems items={items} onDecide={decide} />
+                {busy && (
+                  <div className="working">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                )}
+              </div>
+
+              <form
+                className="composer"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  submit();
+                }}
+              >
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      submit();
+                    }
+                  }}
+                  placeholder="What should Grok do?"
+                  rows={1}
+                />
+                <button type="submit" className="primary" disabled={busy || !draft.trim()}>
+                  {busy ? "Working…" : "Send"}
+                </button>
+              </form>
+            </>
+          ) : (
+            <div className="content-empty">
+              <h1>Open a folder to start</h1>
+              <p>Choose a project folder for your next conversation.</p>
+              <button className="primary" onClick={pickFolder}>
+                Choose a folder…
+              </button>
+              {recents.length > 0 && (
+                <div className="recents">
+                  <div className="recents-head">Recent</div>
+                  {recents.map((p) => (
+                    <button key={p.path} className="recent" onClick={() => openFolder(p.path)} title={p.path}>
+                      <strong>{p.name}</strong>
+                      <span>{p.path}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {notice && <p className="notice error">{notice}</p>}
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
   );
+}
+
+function TranscriptItems({
+  items,
+  onDecide,
+}: {
+  items: Item[];
+  onDecide?: (i: AskItem, optionId: string | null, label: string) => void;
+}) {
+  return items.map((item) => {
+    if (isTool(item)) {
+      return (
+        <div key={item.id} className={`tool ${item.status}`}>
+          <span className="tick" />
+          {item.title}
+        </div>
+      );
+    }
+    if (isAsk(item)) return <PermissionCard key={item.id} item={item} onDecide={onDecide} />;
+    if (isPlan(item)) return <PlanCard key={item.id} entries={item.entries} />;
+    return (
+      <div key={item.id} className={`bubble ${item.kind}`}>
+        {item.text}
+      </div>
+    );
+  });
 }
 
 /// The gate. Our PreToolUse hook holds Grok's tool call open until the user
@@ -425,7 +715,7 @@ function PermissionCard({
   onDecide,
 }: {
   item: AskItem;
-  onDecide: (i: AskItem, optionId: string | null, label: string) => void;
+  onDecide?: (i: AskItem, optionId: string | null, label: string) => void;
 }) {
   const { toolCall, options } = item.req;
   const content = toolCall?.content ?? [];
@@ -455,17 +745,19 @@ function PermissionCard({
           {c.text ?? ""}
         </pre>
       ))}
-      <div className="ask-actions">
-        {options.map((o) => (
-          <button
-            key={o.optionId}
-            className={String(o.kind).startsWith("allow") ? "primary" : ""}
-            onClick={() => onDecide(item, o.optionId, o.name)}
-          >
-            {o.name}
-          </button>
-        ))}
-      </div>
+      {onDecide && (
+        <div className="ask-actions">
+          {options.map((o) => (
+            <button
+              key={o.optionId}
+              className={String(o.kind).startsWith("allow") ? "primary" : ""}
+              onClick={() => onDecide(item, o.optionId, o.name)}
+            >
+              {o.name}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
