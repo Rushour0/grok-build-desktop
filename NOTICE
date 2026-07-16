@@ -1,0 +1,25 @@
+Grok Build Desktop
+Copyright 2026 Grok Build Desktop contributors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+--------------------------------------------------------------------------------
+
+This product is an independent, unofficial desktop GUI for Grok Build. It is not
+affiliated with, sponsored by, or endorsed by xAI / SpaceXAI.
+
+At runtime it downloads and drives the Grok Build CLI:
+
+    Grok Build — https://github.com/xai-org/grok-build
+    Copyright 2023-2026 SpaceXAI
+    Licensed under the Apache License, Version 2.0
+
+The Grok Build CLI is not redistributed as part of this repository; it is fetched
+from xAI's official installer (https://x.ai/cli/install.sh) on the user's machine.
+
+"Grok" and "xAI" are trademarks of their respective owners. Their use here is
+nominative, to identify the software this tool interoperates with.
