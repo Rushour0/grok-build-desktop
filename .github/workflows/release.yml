@@ -109,34 +109,19 @@ jobs:
 
       - run: npm ci
 
-      # Signing is dormant until these secrets exist. Add them in repository
-      # Settings → Secrets to activate it; no code change is needed.
-      # GitHub substitutes an empty string for an unset secret, and tauri-action
-      # treats empty signing configuration as "do not sign", preserving today's
-      # unsigned behavior until the corresponding secrets are populated.
+      # Builds are unsigned (no OS code-signing certs yet). Do NOT add empty
+      # APPLE_CERTIFICATE / WINDOWS_CERTIFICATE env vars to "prep" signing: a
+      # referenced-but-unset secret is an EMPTY STRING, not absent, and
+      # tauri-action then tries to import a blank cert and fails codesign on
+      # macOS. When certs exist, wire signing as a SEPARATE step gated by
+      # `if: secrets.APPLE_CERTIFICATE != ''` so the vars are omitted when off.
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signs the updater artifacts. Without these the build still produces
-          # installers, but auto-update won't verify and is effectively off.
+          # Signs the updater artifacts (minisign — NOT OS code signing). Without
+          # these the build still produces installers, but auto-update won't verify.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-
-          # Apple code signing and notarization are exposed only to macOS legs.
-          APPLE_CERTIFICATE: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          # These three variables trigger notarization only on the macOS legs.
-          APPLE_ID: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_TEAM_ID || '' }}
-
-          # Windows placeholders are likewise restricted to the Windows leg.
-          # Fully activating Windows signing also requires a follow-up change to
-          # bundle.windows.certificateThumbprint/signCommand in tauri.conf.json.
-          WINDOWS_CERTIFICATE: ${{ matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE || '' }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
-          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ matrix.platform == 'windows-latest' && secrets.WINDOWS_CERTIFICATE_THUMBPRINT || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Grok Build Desktop ${{ github.ref_name }}"
