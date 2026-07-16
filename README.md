@@ -1,5 +1,8 @@
 # Grok Build Desktop
 
+<img width="1063" height="736" alt="Screenshot 2026-07-16 at 5 49 37 AM" src="https://github.com/user-attachments/assets/0a8efbf6-c3ec-4d4e-9f6c-c89980ab14ae" />
+
+
 **A GUI for [Grok Build](https://github.com/xai-org/grok-build) — for the rest of us.**
 
 xAI open-sourced Grok Build, their coding agent. It's genuinely good. It's also a
