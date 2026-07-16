@@ -48,20 +48,21 @@ export const loadSessionUpdates = (cwd: string, sessionId: string) =>
   invoke<SessionUpdate[]>("load_session_updates", { cwd, sessionId });
 export const searchSessions = (query: string, cwd?: string) =>
   invoke<string[]>("search_sessions", { query, cwd });
-export const connect = (cwd: string) => invoke<ConnectResult>("connect", { cwd });
-export const authenticate = (methodId: string) => invoke<void>("authenticate", { methodId });
-export const openSession = (cwd: string) => invoke<string>("open_session", { cwd });
-export const sendPrompt = (text: string) => invoke<void>("send_prompt", { text });
-export const cancelRun = () => invoke<void>("cancel");
+export const connect = (tabId: string, cwd: string) => invoke<ConnectResult>("connect", { tabId, cwd });
+export const authenticate = (tabId: string, methodId: string) =>
+  invoke<void>("authenticate", { tabId, methodId });
+export const openSession = (tabId: string, cwd: string) => invoke<string>("open_session", { tabId, cwd });
+export const sendPrompt = (tabId: string, text: string) => invoke<void>("send_prompt", { tabId, text });
+export const cancelRun = (tabId: string) => invoke<void>("cancel", { tabId });
 
 /// Answer an open ACP permission request. `optionId: null` rejects it.
-export const respondPermission = (requestId: number, optionId: string | null) =>
-  invoke<void>("respond_permission", { requestId, optionId });
+export const respondPermission = (tabId: string, requestId: number, optionId: string | null) =>
+  invoke<void>("respond_permission", { tabId, requestId, optionId });
 
 /// Answer a hook-gated tool call (the default-deny PreToolUse bridge). This is
 /// the path that actually fires today; `respondPermission` is the inert ACP one.
-export const respondHook = (toolUseId: string, allow: boolean) =>
-  invoke<void>("respond_hook", { toolUseId, allow });
+export const respondHook = (tabId: string, toolUseId: string, allow: boolean) =>
+  invoke<void>("respond_hook", { tabId, toolUseId, allow });
 
 // ---- ACP session/update payloads (Rust -> webview) ----
 // Shapes verified against grok 0.2.101's `initialize` response.
@@ -92,6 +93,7 @@ export interface SessionUpdate {
 }
 
 export interface AcpUpdate {
+  tabId: string;
   sessionId: string;
   update: SessionUpdate;
 }
@@ -116,21 +118,29 @@ export interface PermissionRequest {
 // ---- events (Rust -> webview) ----
 
 type Handlers = {
-  onUpdate: (u: SessionUpdate) => void;
-  onPermission: (req: PermissionRequest) => void;
-  onTurnEnd: (result: { stopReason?: string }) => void;
-  onError: (message: string) => void;
-  onClosed: () => void;
+  onUpdate: (tabId: string, u: SessionUpdate) => void;
+  onPermission: (tabId: string, req: PermissionRequest) => void;
+  onTurnEnd: (tabId: string, result: { stopReason?: string }) => void;
+  onError: (tabId: string, message: string) => void;
+  onClosed: (tabId: string) => void;
 };
 
 /// Subscribe to the agent stream. Returns a disposer that detaches every listener.
 export async function subscribe(h: Handlers): Promise<UnlistenFn> {
   const offs = await Promise.all([
-    listen<AcpUpdate>("acp-update", (e) => e.payload?.update && h.onUpdate(e.payload.update)),
-    listen<PermissionRequest>("acp-permission", (e) => e.payload && h.onPermission(e.payload)),
-    listen<{ stopReason?: string }>("acp-turn-end", (e) => h.onTurnEnd(e.payload ?? {})),
-    listen<{ message?: string }>("acp-error", (e) => h.onError(e.payload?.message ?? "Something went wrong")),
-    listen("acp-closed", () => h.onClosed()),
+    listen<AcpUpdate>("acp-update", (e) =>
+      e.payload?.update && h.onUpdate(e.payload.tabId, e.payload.update),
+    ),
+    listen<PermissionRequest & { tabId: string }>("acp-permission", (e) =>
+      e.payload && h.onPermission(e.payload.tabId, e.payload),
+    ),
+    listen<{ tabId: string; stopReason?: string }>("acp-turn-end", (e) =>
+      e.payload && h.onTurnEnd(e.payload.tabId, e.payload),
+    ),
+    listen<{ tabId: string; message?: string }>("acp-error", (e) =>
+      e.payload && h.onError(e.payload.tabId, e.payload.message ?? "Something went wrong"),
+    ),
+    listen<{ tabId: string }>("acp-closed", (e) => e.payload && h.onClosed(e.payload.tabId)),
   ]);
   return () => offs.forEach((off) => off());
 }

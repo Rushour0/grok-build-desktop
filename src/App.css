@@ -242,6 +242,13 @@ button.recent span {
 button.new-chat {
   width: 100%;
 }
+button.open-folder {
+  width: 100%;
+  margin-top: -0.35rem;
+  font-size: 0.8rem;
+  padding: 0.4em 0.7em;
+  color: var(--ink-soft);
+}
 .side-search {
   width: 100%;
   margin-top: 0.75rem;
@@ -411,6 +418,74 @@ button.transcript-close:hover {
 }
 
 /* ---- live chat ---- */
+
+.tab-strip {
+  min-width: 0;
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  scrollbar-width: thin;
+}
+.chat-tab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  border-right: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+.chat-tab:hover {
+  background: var(--panel);
+  color: var(--ink);
+}
+.chat-tab.active {
+  color: var(--ink);
+  background: var(--panel);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  font-weight: 600;
+}
+button.tab-select,
+button.tab-close,
+button.tab-add {
+  flex: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+button.tab-select {
+  max-width: 12rem;
+  overflow: hidden;
+  padding: 0.4rem 0.35rem 0.4rem 0.75rem;
+  color: inherit;
+  font-weight: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button.tab-close {
+  width: 1.7rem;
+  padding: 0.4rem 0.45rem 0.4rem 0.2rem;
+  color: var(--ink-soft);
+  line-height: 1;
+}
+button.tab-close:hover,
+button.tab-add:hover {
+  color: var(--ink);
+  background: var(--panel);
+}
+button.tab-add {
+  width: 2.25rem;
+  padding: 0.4rem 0.65rem;
+  color: var(--ink-soft);
+  font-size: 1rem;
+}
+.tab-auth {
+  gap: 0.75rem;
+}
+.tab-auth > p {
+  margin-bottom: 0;
+}
 
 .bar {
   display: flex;

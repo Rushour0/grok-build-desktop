@@ -26,8 +26,8 @@ import {
 } from "./lib/bridge";
 import "./App.css";
 
-// The app is a straight line: setup -> sign in -> pick a folder -> chat.
-type Stage = "checking" | "needs-install" | "installing" | "ready" | "authenticating" | "chat";
+// Installation is global; folders, authentication, and conversations live in tabs.
+type Stage = "checking" | "needs-install" | "installing" | "ready" | "chat";
 
 interface ToolItem {
   id: string;
@@ -52,6 +52,39 @@ interface PlanItem {
   entries: { content: string; status?: string; priority?: string }[];
 }
 type Item = ToolItem | TextItem | AskItem | PlanItem;
+
+interface Tab {
+  id: string;
+  cwd: string | null;
+  sessionId: string | null;
+  items: Item[];
+  busy: boolean;
+  draft: string;
+  attachments: string[];
+  needsAuth: boolean;
+  authMethods: AuthMethod[];
+}
+
+let nextTabId = 1;
+let nextItemId = 1;
+
+function createTab(): Tab {
+  return {
+    id: `tab-${nextTabId++}`,
+    cwd: null,
+    sessionId: null,
+    items: [],
+    busy: false,
+    draft: "",
+    attachments: [],
+    needsAuth: false,
+    authMethods: [],
+  };
+}
+
+function itemId(prefix: string): string {
+  return `${prefix}-${nextItemId++}`;
+}
 
 const isTool = (i: Item): i is ToolItem => i.kind === "tool";
 const isAsk = (i: Item): i is AskItem => i.kind === "ask";
@@ -166,12 +199,8 @@ function sessionDate(value: string): string {
 
 export default function App() {
   const [stage, setStage] = useState<Stage>("checking");
-  const [cwd, setCwd] = useState<string | null>(null);
-  const [authMethods, setAuthMethods] = useState<AuthMethod[]>([]);
-  const [items, setItems] = useState<Item[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [attachments, setAttachments] = useState<string[]>([]);
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [recents, setRecents] = useState<Project[]>([]);
@@ -191,15 +220,34 @@ export default function App() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const transcriptRequest = useRef(0);
+  const tabsRef = useRef(tabs);
   // Chunks stream in one fragment at a time; keep appending to the same bubble
   // until something else happens rather than making a bubble per fragment.
-  const openBubble = useRef<{ answer?: string; thought?: string }>({});
+  const openBubbles = useRef<Map<string, { answer?: string; thought?: string }>>(new Map());
   // Grok resends the whole plan as it evolves; update one card in place per turn.
-  const planId = useRef<string | null>(null);
+  const planIds = useRef<Map<string, string | null>>(new Map());
+
+  tabsRef.current = tabs;
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+
+  const updateTab = useCallback((tabId: string, updateTabState: (tab: Tab) => Tab) => {
+    setTabs((current) => {
+      const nextTabs = current.map((tab) => (tab.id === tabId ? updateTabState(tab) : tab));
+      tabsRef.current = nextTabs;
+      return nextTabs;
+    });
+  }, []);
+
+  const updateActiveTab = useCallback(
+    (updateTabState: (tab: Tab) => Tab) => {
+      if (activeTabId) updateTab(activeTabId, updateTabState);
+    },
+    [activeTabId, updateTab],
+  );
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [items, busy, historySession]);
+  }, [activeTab?.items, activeTab?.busy, historySession]);
 
   useEffect(() => {
     authStatus()
@@ -275,7 +323,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (stage !== "chat" || !cwd || historySession) {
+    const dropTabId = activeTab?.id;
+    const dropCwd = activeTab?.cwd;
+    if (stage !== "chat" || !dropTabId || !dropCwd || historySession) {
       setDragging(false);
       return;
     }
@@ -291,7 +341,10 @@ export default function App() {
           setDragging(false);
         } else if (payload.type === "drop") {
           setDragging(false);
-          setAttachments((current) => [...new Set([...current, ...(payload.paths ?? [])])]);
+          updateTab(dropTabId, (tab) => ({
+            ...tab,
+            attachments: [...new Set([...tab.attachments, ...(payload.paths ?? [])])],
+          }));
         }
       })
       .then((stopListening) => {
@@ -306,7 +359,7 @@ export default function App() {
       cancelled = true;
       unlisten?.();
     };
-  }, [cwd, historySession, stage]);
+  }, [activeTab?.cwd, activeTab?.id, historySession, stage, updateTab]);
 
   async function installUpdate() {
     if (!update) return;
@@ -320,104 +373,133 @@ export default function App() {
     }
   }
 
-  const appendText = useCallback((kind: TextItem["kind"], id: string, chunk: string) => {
-    setItems((prev) => {
-      const last = prev[prev.length - 1];
+  const appendText = useCallback((tabId: string, kind: TextItem["kind"], id: string, chunk: string) => {
+    updateTab(tabId, (tab) => {
+      const last = tab.items[tab.items.length - 1];
       if (last && isText(last) && last.id === id) {
-        return [...prev.slice(0, -1), { ...last, text: last.text + chunk }];
+        return { ...tab, items: [...tab.items.slice(0, -1), { ...last, text: last.text + chunk }] };
       }
-      return [...prev, { id, kind, text: chunk }];
+      return { ...tab, items: [...tab.items, { id, kind, text: chunk }] };
     });
-  }, []);
+  }, [updateTab]);
 
   const onUpdate = useCallback(
-    (u: SessionUpdate) => {
+    (tabId: string, u: SessionUpdate) => {
+      if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
+
       switch (u.sessionUpdate) {
         case "agent_message_chunk": {
-          openBubble.current.answer ??= `a-${Date.now()}`;
-          appendText("answer", openBubble.current.answer, u.content?.text ?? "");
+          const bubbles = openBubbles.current.get(tabId) ?? {};
+          const id = bubbles.answer ?? itemId("a");
+          if (!bubbles.answer) openBubbles.current.set(tabId, { ...bubbles, answer: id });
+          appendText(tabId, "answer", id, u.content?.text ?? "");
           break;
         }
         case "agent_thought_chunk": {
-          openBubble.current.thought ??= `t-${Date.now()}`;
-          appendText("thought", openBubble.current.thought, u.content?.text ?? "");
+          const bubbles = openBubbles.current.get(tabId) ?? {};
+          const id = bubbles.thought ?? itemId("t");
+          if (!bubbles.thought) openBubbles.current.set(tabId, { ...bubbles, thought: id });
+          appendText(tabId, "thought", id, u.content?.text ?? "");
           break;
         }
         case "tool_call": {
-          const id = u.toolCallId ?? `tool-${Date.now()}`;
-          setItems((prev) => [
-            ...prev,
-            { id, kind: "tool", title: u.title ?? u.kind ?? "Working", status: u.status ?? "in_progress" },
-          ]);
+          const id = u.toolCallId ?? itemId("tool");
+          updateTab(tabId, (tab) => ({
+            ...tab,
+            items: [
+              ...tab.items,
+              { id, kind: "tool", title: u.title ?? u.kind ?? "Working", status: u.status ?? "in_progress" },
+            ],
+          }));
           // A tool ran, so any answer text after it belongs in a fresh bubble.
-          openBubble.current = {};
+          openBubbles.current.set(tabId, {});
           break;
         }
         case "tool_call_update": {
-          setItems((prev) =>
-            prev.map((i) =>
+          updateTab(tabId, (tab) => ({
+            ...tab,
+            items: tab.items.map((i) =>
               isTool(i) && i.id === u.toolCallId
                 ? { ...i, status: u.status ?? i.status, title: u.title ?? i.title }
                 : i,
             ),
-          );
+          }));
           break;
         }
         case "plan": {
           const entries = u.entries ?? [];
           // Decide the plan item's id outside the updater so the updater stays a
           // pure function (no ref mutation under StrictMode double-invocation).
-          if (!planId.current) planId.current = `plan-${Date.now()}`;
-          const id = planId.current;
-          setItems((prev) =>
-            prev.some((i) => isPlan(i) && i.id === id)
-              ? prev.map((i) => (isPlan(i) && i.id === id ? { ...i, entries } : i))
-              : [...prev, { id, kind: "plan", entries }],
-          );
-          openBubble.current = {};
+          let id = planIds.current.get(tabId);
+          if (!id) {
+            id = itemId("plan");
+            planIds.current.set(tabId, id);
+          }
+          updateTab(tabId, (tab) => ({
+            ...tab,
+            items: tab.items.some((i) => isPlan(i) && i.id === id)
+              ? tab.items.map((i) => (isPlan(i) && i.id === id ? { ...i, entries } : i))
+              : [...tab.items, { id, kind: "plan", entries }],
+          }));
+          openBubbles.current.set(tabId, {});
           break;
         }
         default:
           break; // user_message_chunk: the echo of our own prompt, no need to show
       }
     },
-    [appendText],
+    [appendText, updateTab],
   );
 
   useEffect(() => {
     const off = subscribe({
       onUpdate,
-      onPermission: (req) => {
-        openBubble.current = {};
-        setItems((prev) => [...prev, { id: `p-${req.requestId}`, kind: "ask", req, decided: null }]);
+      onPermission: (tabId, req) => {
+        if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
+        openBubbles.current.set(tabId, {});
+        updateTab(tabId, (tab) => ({
+          ...tab,
+          items: [...tab.items, { id: itemId("p"), kind: "ask", req, decided: null }],
+        }));
       },
-      onTurnEnd: () => {
-        setBusy(false);
-        openBubble.current = {};
-        planId.current = null; // next turn starts a fresh plan
+      onTurnEnd: (tabId) => {
+        if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
+        updateTab(tabId, (tab) => ({ ...tab, busy: false }));
+        openBubbles.current.set(tabId, {});
+        planIds.current.set(tabId, null); // next turn starts a fresh plan
         setHistoryRevision((revision) => revision + 1);
       },
-      onError: (message) => {
-        setBusy(false);
-        openBubble.current = {};
-        setItems((prev) => [...prev, { id: `e-${Date.now()}`, kind: "error", text: message }]);
+      onError: (tabId, message) => {
+        if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
+        openBubbles.current.set(tabId, {});
+        updateTab(tabId, (tab) => ({
+          ...tab,
+          busy: false,
+          items: [...tab.items, { id: itemId("e"), kind: "error", text: message }],
+        }));
       },
-      onClosed: () => setBusy(false),
+      onClosed: (tabId) => {
+        if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
+        updateTab(tabId, (tab) => ({ ...tab, busy: false }));
+      },
     });
     return () => {
       off.then((fn) => fn());
     };
-  }, [onUpdate]);
+  }, [onUpdate, updateTab]);
 
-  async function decide(item: AskItem, optionId: string | null, label: string) {
+  async function decide(tab: Tab, item: AskItem, optionId: string | null, label: string) {
     // Hook-gated requests (the path that fires today) go back through respondHook;
     // ACP requests through respondPermission. `optionId === "allow"` means approve.
     if (item.req.hookToolUseId) {
-      await respondHook(item.req.hookToolUseId, optionId === "allow").catch(() => {});
+      await respondHook(tab.id, item.req.hookToolUseId, optionId === "allow").catch(() => {});
     } else {
-      await respondPermission(item.req.requestId, optionId).catch(() => {});
+      await respondPermission(tab.id, item.req.requestId, optionId).catch(() => {});
     }
-    setItems((prev) => prev.map((i) => (isAsk(i) && i.id === item.id ? { ...i, decided: label } : i)));
+    updateTab(tab.id, (current) => ({
+      ...current,
+      items: current.items.map((i) => (isAsk(i) && i.id === item.id ? { ...i, decided: label } : i)),
+    }));
   }
 
   async function doInstall() {
@@ -432,38 +514,83 @@ export default function App() {
     }
   }
 
-  async function openFolder(path: string) {
+  function addTab(): Tab {
+    const tab = createTab();
+    setTabs((current) => {
+      const nextTabs = [...current, tab];
+      tabsRef.current = nextTabs;
+      return nextTabs;
+    });
+    setActiveTabId(tab.id);
+    setStage("chat");
+    return tab;
+  }
+
+  async function openFolder(tabId: string, path: string) {
     closeTranscript();
     setNotice(null);
     try {
-      const res = await connect(path);
-      setCwd(path);
-      setAttachments([]);
+      const res = await connect(tabId, path);
+      if (!tabsRef.current.some((tab) => tab.id === tabId)) {
+        await cancelRun(tabId).catch(() => {});
+        return;
+      }
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        cwd: path,
+        sessionId: res.session_id,
+        attachments: [],
+        needsAuth: res.needs_auth,
+        authMethods: res.auth_methods,
+      }));
       setDragging(false);
       setHistoryRevision((revision) => revision + 1);
-      if (res.needs_auth) {
-        setAuthMethods(res.auth_methods);
-        setStage("authenticating");
-      } else {
-        setStage("chat");
-      }
+      setStage("chat");
     } catch (e) {
       setNotice(String(e));
     }
   }
 
-  async function pickFolder() {
+  async function pickFolder(tabId?: string) {
     closeTranscript();
+    const target = tabId ? tabsRef.current.find((tab) => tab.id === tabId) : addTab();
+    if (!target) return;
+    setActiveTabId(target.id);
     const picked = await open({ directory: true, multiple: false, title: "Choose a project folder" });
     if (typeof picked !== "string") return;
-    await openFolder(picked);
+    await openFolder(target.id, picked);
   }
 
-  async function signIn(methodId: string) {
+  async function openRecent(path: string) {
+    const tab = addTab();
+    await openFolder(tab.id, path);
+  }
+
+  // A new tab is a parallel RUN in the CURRENT project (e.g. one agent fixes a
+  // bug while another writes tests, same repo) — not a different project. Only
+  // fall back to the folder picker when nothing is open yet.
+  async function addRun() {
+    const folder = activeTab?.cwd ?? tabsRef.current.find((tab) => tab.cwd)?.cwd ?? null;
+    if (!folder) {
+      await pickFolder();
+      return;
+    }
+    const tab = addTab();
+    await openFolder(tab.id, folder);
+  }
+
+  async function signIn(tab: Tab, methodId: string) {
     setNotice("A browser window will open — finish signing in there.");
     try {
-      await authenticate(methodId);
-      if (cwd) await openSession(cwd);
+      await authenticate(tab.id, methodId);
+      if (!tabsRef.current.some((candidate) => candidate.id === tab.id)) return;
+      const sessionId = tab.cwd ? await openSession(tab.id, tab.cwd) : tab.sessionId;
+      updateTab(tab.id, (current) => ({
+        ...current,
+        sessionId,
+        needsAuth: false,
+        authMethods: [],
+      }));
       setNotice(null);
       setStage("chat");
     } catch (e) {
@@ -472,31 +599,46 @@ export default function App() {
   }
 
   async function submit() {
-    const prompt = draft.trim();
-    const mentions = attachments.map((attachment) => toMention(cwd, attachment)).join(" ");
+    const tab = tabsRef.current.find((candidate) => candidate.id === activeTabId);
+    if (!tab) return;
+    const prompt = tab.draft.trim();
+    const mentions = tab.attachments.map((attachment) => toMention(tab.cwd, attachment)).join(" ");
     const text = prompt && mentions ? `${prompt}\n\n${mentions}` : prompt || mentions;
-    if (!text || busy) return;
-    setDraft("");
-    setAttachments([]);
-    setItems((prev) => [...prev, { id: `u-${Date.now()}`, kind: "you", text }]);
-    openBubble.current = {};
-    setBusy(true);
+    if (!text || tab.busy) return;
+    updateTab(tab.id, (current) => ({
+      ...current,
+      draft: "",
+      attachments: [],
+      busy: true,
+      items: [...current.items, { id: itemId("u"), kind: "you", text }],
+    }));
+    openBubbles.current.set(tab.id, {});
     try {
-      await sendPrompt(text);
+      await sendPrompt(tab.id, text);
     } catch (e) {
-      setBusy(false);
-      setItems((prev) => [...prev, { id: `e-${Date.now()}`, kind: "error", text: String(e) }]);
+      updateTab(tab.id, (current) => ({
+        ...current,
+        busy: false,
+        items: [...current.items, { id: itemId("e"), kind: "error", text: String(e) }],
+      }));
     }
   }
 
-  async function closeFolder() {
-    await cancelRun().catch(() => {});
-    setBusy(false);
-    setItems([]);
-    setAttachments([]);
+  function closeTab(tabId: string) {
+    void cancelRun(tabId).catch(() => {});
+    const currentTabs = tabsRef.current;
+    const index = currentTabs.findIndex((tab) => tab.id === tabId);
+    if (index < 0) return;
+    const nextTabs = currentTabs.filter((tab) => tab.id !== tabId);
+    tabsRef.current = nextTabs;
+    setTabs(nextTabs);
+    openBubbles.current.delete(tabId);
+    planIds.current.delete(tabId);
+    if (activeTabId === tabId) {
+      setActiveTabId(nextTabs[Math.min(index, nextTabs.length - 1)]?.id ?? null);
+    }
     setDragging(false);
-    setStage("ready");
-    setCwd(null);
+    if (nextTabs.length === 0) setStage("ready");
   }
 
   async function viewSession(session: SessionMeta) {
@@ -544,19 +686,6 @@ export default function App() {
     );
   }
 
-  if (stage === "authenticating") {
-    return (
-      <Splash banner={banner} title="Sign in to continue" line="Grok needs you signed in before it can work on your project.">
-        {authMethods.map((m) => (
-          <button key={m.id} className="primary" onClick={() => signIn(m.id)}>
-            {m.description ?? `Sign in with ${m.name}`}
-          </button>
-        ))}
-        {notice && <p className="notice">{notice}</p>}
-      </Splash>
-    );
-  }
-
   const query = historyQuery.trim().toLocaleLowerCase();
   const contentMatches = new Set(historySearchIds);
   const filteredSessions = query
@@ -578,8 +707,15 @@ export default function App() {
               <span className="mark" />
               <strong>Grok Build</strong>
             </div>
-            <button className="new-chat primary" onClick={pickFolder}>
+            <button className="new-chat primary" onClick={() => addRun()}>
               New chat
+            </button>
+            <button
+              className="open-folder ghost"
+              onClick={() => pickFolder()}
+              title="Open a different project folder"
+            >
+              Open folder…
             </button>
           </div>
           <input
@@ -622,7 +758,7 @@ export default function App() {
         </aside>
 
         <main className="content">
-          {dragging && stage === "chat" && cwd && !historySession && (
+          {dragging && stage === "chat" && activeTab?.cwd && !historySession && (
             <div className="drop-overlay">Drop files to attach</div>
           )}
           {historySession ? (
@@ -650,110 +786,176 @@ export default function App() {
                 <TranscriptItems items={historyItems} />
               </div>
             </>
-          ) : stage === "chat" && cwd ? (
+          ) : tabs.length > 0 ? (
             <>
-              <header className="bar">
-                {/* The full path is the answer to "does it actually know where it's working?" */}
-                <div className="folder" title={cwd}>
-                  <span className="dot" />
-                  <strong>{folderName(cwd)}</strong>
-                  <span className="path">{cwd}</span>
-                </div>
-                <button className="ghost" onClick={closeFolder}>
-                  Close folder
+              <nav className="tab-strip" aria-label="Chat tabs">
+                {tabs.map((tab) => (
+                  <div className={`chat-tab${tab.id === activeTabId ? " active" : ""}`} key={tab.id}>
+                    <button
+                      className="tab-select"
+                      onClick={() => setActiveTabId(tab.id)}
+                      aria-current={tab.id === activeTabId ? "page" : undefined}
+                      title={tab.cwd ?? "New tab"}
+                    >
+                      {tab.cwd ? folderName(tab.cwd) : "New tab"}
+                    </button>
+                    <button
+                      className="tab-close"
+                      onClick={() => closeTab(tab.id)}
+                      aria-label={`Close ${tab.cwd ? folderName(tab.cwd) : "new tab"}`}
+                      title="Close tab"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                <button
+                  className="tab-add"
+                  onClick={() => addRun()}
+                  aria-label="New run in this project"
+                  title="New run in this project"
+                >
+                  +
                 </button>
-              </header>
+              </nav>
 
-              <div className="stream" ref={scrollRef}>
-                {items.length === 0 && (
-                  <div className="empty">
-                    <p>
-                      Grok can read and edit everything in <strong>{folderName(cwd)}</strong>. Tell it what you want
-                      done, in plain English.
-                    </p>
-                    <p className="eg">e.g. “add a README explaining what this project does”</p>
-                    {/* Be straight about this: Grok's agent mode applies edits itself. */}
-                    <p className="eg warn">
-                      Grok can change files here on its own. Use a folder you can undo — ideally one in git.
-                    </p>
-                  </div>
-                )}
-                <TranscriptItems items={items} onDecide={decide} />
-                {busy && (
-                  <div className="working">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                )}
-              </div>
+              {activeTab?.needsAuth ? (
+                <div className="content-empty tab-auth">
+                  <h1>Sign in to continue</h1>
+                  <p>Grok needs you signed in before it can work on this project.</p>
+                  {activeTab.authMethods.map((method) => (
+                    <button key={method.id} className="primary" onClick={() => signIn(activeTab, method.id)}>
+                      {method.description ?? `Sign in with ${method.name}`}
+                    </button>
+                  ))}
+                  {notice && <p className="notice">{notice}</p>}
+                </div>
+              ) : activeTab?.cwd ? (
+                <>
+                  <header className="bar">
+                    {/* The full path is the answer to "does it actually know where it's working?" */}
+                    <div className="folder" title={activeTab.cwd}>
+                      <span className="dot" />
+                      <strong>{folderName(activeTab.cwd)}</strong>
+                      <span className="path">{activeTab.cwd}</span>
+                    </div>
+                    <button className="ghost" onClick={() => closeTab(activeTab.id)}>
+                      Close tab
+                    </button>
+                  </header>
 
-              <form
-                className="composer"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  submit();
-                }}
-              >
-                {attachments.length > 0 && (
-                  <div className="attachments" aria-label="Attached files">
-                    {attachments.map((attachment) => (
-                      <span
-                        className="attachment-chip"
-                        key={attachment}
-                        title={
-                          isImagePath(attachment)
-                            ? "Grok can't view images yet — it'll see the path only"
-                            : attachment
-                        }
-                      >
-                        <span className="attachment-name">{folderName(attachment)}</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setAttachments((current) => current.filter((path) => path !== attachment))
-                          }
-                          aria-label={`Remove ${folderName(attachment)}`}
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
+                  <div className="stream" ref={scrollRef}>
+                    {activeTab.items.length === 0 && (
+                      <div className="empty">
+                        <p>
+                          Grok can read and edit everything in <strong>{folderName(activeTab.cwd)}</strong>. Tell it
+                          what you want done, in plain English.
+                        </p>
+                        <p className="eg">e.g. “add a README explaining what this project does”</p>
+                        {/* Be straight about this: Grok's agent mode applies edits itself. */}
+                        <p className="eg warn">
+                          Grok can change files here on its own. Use a folder you can undo — ideally one in git.
+                        </p>
+                      </div>
+                    )}
+                    <TranscriptItems
+                      items={activeTab.items}
+                      onDecide={(item, optionId, label) => decide(activeTab, item, optionId, label)}
+                    />
+                    {activeTab.busy && (
+                      <div className="working">
+                        <span />
+                        <span />
+                        <span />
+                      </div>
+                    )}
                   </div>
-                )}
-                <textarea
-                  value={draft}
-                  onChange={(e) => setDraft(e.currentTarget.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
+
+                  <form
+                    className="composer"
+                    onSubmit={(e) => {
                       e.preventDefault();
                       submit();
-                    }
-                  }}
-                  placeholder="What should Grok do?"
-                  rows={1}
-                />
-                <button
-                  type="submit"
-                  className="primary"
-                  disabled={busy || (!draft.trim() && attachments.length === 0)}
-                >
-                  {busy ? "Working…" : "Send"}
-                </button>
-              </form>
+                    }}
+                  >
+                    {activeTab.attachments.length > 0 && (
+                      <div className="attachments" aria-label="Attached files">
+                        {activeTab.attachments.map((attachment) => (
+                          <span
+                            className="attachment-chip"
+                            key={attachment}
+                            title={
+                              isImagePath(attachment)
+                                ? "Grok can't view images yet — it'll see the path only"
+                                : attachment
+                            }
+                          >
+                            <span className="attachment-name">{folderName(attachment)}</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateActiveTab((tab) => ({
+                                  ...tab,
+                                  attachments: tab.attachments.filter((path) => path !== attachment),
+                                }))
+                              }
+                              aria-label={`Remove ${folderName(attachment)}`}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <textarea
+                      value={activeTab.draft}
+                      onChange={(e) => {
+                        const draft = e.currentTarget.value;
+                        updateActiveTab((tab) => ({ ...tab, draft }));
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          submit();
+                        }
+                      }}
+                      placeholder="What should Grok do?"
+                      rows={1}
+                    />
+                    <button
+                      type="submit"
+                      className="primary"
+                      disabled={
+                        activeTab.busy || (!activeTab.draft.trim() && activeTab.attachments.length === 0)
+                      }
+                    >
+                      {activeTab.busy ? "Working…" : "Send"}
+                    </button>
+                  </form>
+                </>
+              ) : (
+                <div className="content-empty">
+                  <h1>Choose a folder for this tab</h1>
+                  <p>This tab is ready for a project folder.</p>
+                  <button className="primary" onClick={() => pickFolder(activeTab?.id)}>
+                    Choose a folder…
+                  </button>
+                  {notice && <p className="notice error">{notice}</p>}
+                </div>
+              )}
             </>
           ) : (
             <div className="content-empty">
               <h1>Open a folder to start</h1>
               <p>Choose a project folder for your next conversation.</p>
-              <button className="primary" onClick={pickFolder}>
+              <button className="primary" onClick={() => pickFolder()}>
                 Choose a folder…
               </button>
               {recents.length > 0 && (
                 <div className="recents">
                   <div className="recents-head">Recent</div>
                   {recents.map((p) => (
-                    <button key={p.path} className="recent" onClick={() => openFolder(p.path)} title={p.path}>
+                    <button key={p.path} className="recent" onClick={() => openRecent(p.path)} title={p.path}>
                       <strong>{p.name}</strong>
                       <span>{p.path}</span>
                     </button>
