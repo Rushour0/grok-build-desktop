@@ -158,15 +158,15 @@ export default function App() {
         }
         case "plan": {
           const entries = u.entries ?? [];
-          setItems((prev) => {
-            const id = planId.current;
-            if (id && prev.some((i) => isPlan(i) && i.id === id)) {
-              return prev.map((i) => (isPlan(i) && i.id === id ? { ...i, entries } : i));
-            }
-            const newId = `plan-${Date.now()}`;
-            planId.current = newId;
-            return [...prev, { id: newId, kind: "plan", entries }];
-          });
+          // Decide the plan item's id outside the updater so the updater stays a
+          // pure function (no ref mutation under StrictMode double-invocation).
+          if (!planId.current) planId.current = `plan-${Date.now()}`;
+          const id = planId.current;
+          setItems((prev) =>
+            prev.some((i) => isPlan(i) && i.id === id)
+              ? prev.map((i) => (isPlan(i) && i.id === id ? { ...i, entries } : i))
+              : [...prev, { id, kind: "plan", entries }],
+          );
           openBubble.current = {};
           break;
         }

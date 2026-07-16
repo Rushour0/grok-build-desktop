@@ -62,7 +62,9 @@ npm run tauri dev
 
 v0.2.0 adds a real approval gate through Grok's `PreToolUse` hook system. The app
 installs a global, default-deny hook that asks you to **Allow** or **Deny** each file
-edit or shell command before it runs. Only known read-only tools pass automatically.
+edit or shell command before it runs. Only local read-only tools (reading files,
+searching, listing) pass automatically; anything that writes, runs a command, or reaches
+the network prompts you first.
 It is default-deny on purpose: Grok will try alternate tools when one is blocked (it
 will reach for a shell or a background-task tool if a file-edit tool is denied), so an
 allowlist of safe tools holds where a denylist of dangerous ones does not.

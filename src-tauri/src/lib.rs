@@ -263,14 +263,13 @@ fn is_auth_error(msg: &str) -> bool {
 // The hook script (installed below) speaks this protocol; we parse the JSON.
 
 /// The read-only tools the hook auto-allows. Everything else needs approval.
-/// Kept in sync with the allowlist embedded in `HOOK_SCRIPT`.
+/// Kept in sync with the allowlist embedded in `HOOK_SCRIPT`. Local reads only —
+/// network egress (web_search/web_fetch) is intentionally excluded so it prompts.
 const READONLY_TOOLS: &[&str] = &[
     "read_file",
     "list_dir",
     "grep",
     "search_tool",
-    "web_search",
-    "web_fetch",
     "get_command_or_subagent_output",
     "monitor_status",
 ];
@@ -281,7 +280,13 @@ const HOOK_SCRIPT: &str = r#"#!/bin/sh
 # Installed by Grok Build Desktop. Gates only sessions the app marks live.
 BRIDGE="$HOME/.grok/gbd-bridge"
 INPUT=$(cat)
-field() { printf '%s' "$INPUT" | grep -o "\"$1\":\"[^\"]*\"" | head -1 | sed "s/\"$1\":\"//;s/\"\$//"; }
+
+# Extract scalar fields from the payload prefix BEFORE "toolInput" only. grok
+# emits sessionId/toolName/toolUseId ahead of toolInput, so model-controlled
+# content inside toolInput (a file's bytes, a command) can never spoof them —
+# e.g. writing a file whose content contains '"toolName":"read_file"'.
+HEAD=${INPUT%%\"toolInput\"*}
+field() { printf '%s' "$HEAD" | grep -o "\"$1\":\"[^\"]*\"" | head -1 | sed "s/\"$1\":\"//;s/\"\$//"; }
 SID=$(field sessionId)
 TOOL=$(field toolName)
 TUID=$(field toolUseId)
@@ -291,9 +296,11 @@ if [ -z "$SID" ] || [ ! -f "$BRIDGE/live/$SID" ]; then
   printf '{"decision":"allow"}\n'; exit 0
 fi
 
-# Read-only tools pass automatically. Keep in sync with READONLY_TOOLS.
+# Local read-only tools pass automatically. Network egress (web_search/web_fetch)
+# is deliberately NOT here: it needs approval so a read+exfiltrate path can't run
+# unattended. Keep in sync with READONLY_TOOLS.
 case "$TOOL" in
-  read_file|list_dir|grep|search_tool|web_search|web_fetch|get_command_or_subagent_output|monitor_status)
+  read_file|list_dir|grep|search_tool|get_command_or_subagent_output|monitor_status)
     printf '{"decision":"allow"}\n'; exit 0 ;;
 esac
 
@@ -302,10 +309,11 @@ REQ="$BRIDGE/req/$TUID.json"
 RESP="$BRIDGE/resp/$TUID.json"
 printf '%s' "$INPUT" > "$REQ.tmp" 2>/dev/null && mv "$REQ.tmp" "$REQ" 2>/dev/null
 
-# Wait for the user's decision. Internal deadline (~580s) is shorter than the
-# hook's own timeout (600s) so we return an explicit deny instead of being killed.
+# Wait for the user's decision. Internal deadline (~500s of sleeps, plus per-loop
+# overhead) stays comfortably under the hook's 600s timeout, so we return an
+# explicit deny rather than being force-killed (which would fail open).
 i=0
-while [ "$i" -lt 5800 ]; do
+while [ "$i" -lt 5000 ]; do
   if [ -f "$RESP" ]; then
     cat "$RESP"
     rm -f "$RESP" "$REQ" 2>/dev/null
@@ -363,9 +371,10 @@ fn install_approval_hook() -> Result<(), String> {
 
 /// Turn a raw hook payload into the `acp-permission` shape the webview already
 /// renders (PermissionCard). Mutating tools get a diff or command preview.
-fn build_permission_payload(req: &Value) -> Value {
+/// `tuid` is the request file's stem — the identity the hook script polls on, so
+/// the answer always routes back even when the JSON `toolUseId` is absent.
+fn build_permission_payload(req: &Value, tuid: &str) -> Value {
     let tool = req.get("toolName").and_then(Value::as_str).unwrap_or("");
-    let tuid = req.get("toolUseId").and_then(Value::as_str).unwrap_or("");
     let input = req.get("toolInput").cloned().unwrap_or(Value::Null);
     let s = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or("").to_string();
 
@@ -406,10 +415,13 @@ fn start_approval(app: &AppHandle, session_id: &str, stop: Arc<AtomicBool>) {
     for sub in ["req", "resp", "live"] {
         let _ = std::fs::create_dir_all(root.join(sub));
     }
-    // A new session starts with a clean slate — never inherit a prior run's requests.
+    // A new session starts with a clean slate — never inherit a prior run's
+    // requests, and sweep any live markers a crash left behind (only one app
+    // session is ever active, so every other marker is stale).
     clear_dir(&root.join("req"));
     clear_dir(&root.join("resp"));
-    let _ = install_approval_hook();
+    clear_dir(&root.join("live"));
+    let _ = install_approval_hook(); // idempotent; also installed pre-spawn in connect()
     let _ = std::fs::write(root.join("live").join(session_id), b"1");
 
     let app = app.clone();
@@ -428,6 +440,10 @@ fn start_approval(app: &AppHandle, session_id: &str, stop: Arc<AtomicBool>) {
                         Some(n) if !seen.contains(n) => n.to_string(),
                         _ => continue,
                     };
+                    // The file stem is the id the hook script polls its response on
+                    // (`<TUID>.json`). Key everything on it, never the JSON field —
+                    // the two can differ when grok omits `toolUseId`.
+                    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
                     let Ok(text) = std::fs::read_to_string(&path) else { continue };
                     let Ok(reqv) = serde_json::from_str::<Value>(&text) else { continue };
                     if reqv.get("sessionId").and_then(Value::as_str) != Some(session_id.as_str()) {
@@ -438,12 +454,10 @@ fn start_approval(app: &AppHandle, session_id: &str, stop: Arc<AtomicBool>) {
                     // the hook script's allowlist ever drifts from READONLY_TOOLS.
                     let tool = reqv.get("toolName").and_then(Value::as_str).unwrap_or("");
                     if READONLY_TOOLS.contains(&tool) {
-                        if let Some(tuid) = reqv.get("toolUseId").and_then(Value::as_str) {
-                            let _ = write_decision(tuid, true);
-                        }
+                        let _ = write_decision(&stem, true);
                         continue;
                     }
-                    let _ = app.emit("acp-permission", build_permission_payload(&reqv));
+                    let _ = app.emit("acp-permission", build_permission_payload(&reqv, &stem));
                 }
             }
             thread::sleep(Duration::from_millis(200));
@@ -651,6 +665,10 @@ fn connect(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<Connec
     let grok = resolve_grok().ok_or(
         "Grok Build isn't installed yet. Click \"Install Grok Build\" and we'll set it up for you.",
     )?;
+
+    // Install the approval hook BEFORE spawning grok: grok loads its hook config
+    // at startup, so a hook written afterwards would miss this process's session.
+    let _ = install_approval_hook();
 
     let mut child = Command::new(&grok)
         .arg("agent")
