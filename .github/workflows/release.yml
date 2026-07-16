@@ -1,0 +1,92 @@
+name: Release
+
+# Push a tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) and this builds
+# real installers for macOS, Windows and Linux, then attaches them to a draft
+# GitHub Release. That draft is what non-technical users end up downloading.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            name: macOS (Apple Silicon)
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            name: macOS (Intel)
+          - platform: ubuntu-22.04
+            target: ""
+            name: Linux
+          - platform: windows-latest
+            target: ""
+            name: Windows
+
+    runs-on: ${{ matrix.platform }}
+    name: ${{ matrix.name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # webkit2gtk + friends are Tauri's Linux system deps; the other platforms
+      # already ship theirs.
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+          key: ${{ matrix.target }}
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Grok Build Desktop ${{ github.ref_name }}"
+          releaseBody: |
+            Download the installer for your machine below, open it, and click
+            **Install Grok Build**. No terminal needed.
+
+            - **macOS** — `.dmg` (pick Apple Silicon or Intel)
+            - **Windows** — `.msi`
+            - **Linux** — `.AppImage` or `.deb`
+
+            > These builds are not yet code-signed, so macOS Gatekeeper and
+            > Windows SmartScreen will warn on first open. On macOS:
+            > right-click the app → Open. Signing is tracked in the roadmap.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
