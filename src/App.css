@@ -110,12 +110,48 @@ button.ghost:hover {
   color: var(--danger);
 }
 
+/* ---- update banner ---- */
+
+.update {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.45rem 0.9rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 0.82rem;
+}
+.splash .update {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+.update button {
+  border-color: var(--accent-ink);
+  color: var(--accent-ink);
+  padding: 0.2em 0.7em;
+  font-size: 0.8rem;
+}
+.update button:hover:not(:disabled) {
+  background: rgba(127, 127, 127, 0.25);
+}
+
+.empty .warn {
+  color: var(--danger);
+  opacity: 1;
+}
+
 /* ---- recent projects (sourced from the Grok CLI's session store) ---- */
 
 .recents {
   margin-top: 1.5rem;
   width: min(430px, 100%);
   text-align: left;
+  /* Long histories scroll inside the card instead of pushing the page around. */
+  max-height: 34vh;
+  overflow-y: auto;
 }
 .recents-head {
   font-size: 0.7rem;

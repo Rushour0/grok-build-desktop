@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   authStatus,
   installGrok,
@@ -58,6 +60,8 @@ export default function App() {
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [recents, setRecents] = useState<Project[]>([]);
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [updating, setUpdating] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Chunks stream in one fragment at a time; keep appending to the same bubble
@@ -79,6 +83,26 @@ export default function App() {
   useEffect(() => {
     if (stage === "ready") recentProjects().then(setRecents).catch(() => setRecents([]));
   }, [stage]);
+
+  // Offer updates rather than forcing them: an agent mid-task shouldn't be
+  // restarted out from under the user. `check()` is a no-op in dev.
+  useEffect(() => {
+    check()
+      .then((u) => u && setUpdate(u))
+      .catch(() => {});
+  }, []);
+
+  async function installUpdate() {
+    if (!update) return;
+    setUpdating(true);
+    try {
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch (e) {
+      setUpdating(false);
+      setNotice(`Update failed: ${e}`);
+    }
+  }
 
   const appendText = useCallback((kind: TextItem["kind"], id: string, chunk: string) => {
     setItems((prev) => {
@@ -227,11 +251,16 @@ export default function App() {
     setCwd(null);
   }
 
+  const banner = update ? (
+    <UpdateBanner update={update} busy={updating} onInstall={installUpdate} />
+  ) : null;
+
   if (stage === "checking") return <Splash title="Grok Build Desktop" line="Getting things ready…" />;
 
   if (stage === "needs-install" || stage === "installing") {
     return (
       <Splash
+        banner={banner}
         title="Grok Build Desktop"
         line="Grok Build isn't on this computer yet. We'll install it for you — no terminal needed."
       >
@@ -245,7 +274,7 @@ export default function App() {
 
   if (stage === "ready") {
     return (
-      <Splash title="Grok Build Desktop" line="Pick the project folder you want to work on.">
+      <Splash banner={banner} title="Grok Build Desktop" line="Pick the project folder you want to work on.">
         <button className="primary" onClick={pickFolder}>
           Choose a folder…
         </button>
@@ -267,7 +296,7 @@ export default function App() {
 
   if (stage === "authenticating") {
     return (
-      <Splash title="Sign in to continue" line="Grok needs you signed in before it can work on your project.">
+      <Splash banner={banner} title="Sign in to continue" line="Grok needs you signed in before it can work on your project.">
         {authMethods.map((m) => (
           <button key={m.id} className="primary" onClick={() => signIn(m.id)}>
             {m.description ?? `Sign in with ${m.name}`}
@@ -280,6 +309,7 @@ export default function App() {
 
   return (
     <main className="app">
+      {banner}
       <header className="bar">
         {/* The full path is the answer to "does it actually know where it's working?" */}
         <div className="folder" title={cwd ?? ""}>
@@ -300,7 +330,8 @@ export default function App() {
               Tell it what you want done, in plain English.
             </p>
             <p className="eg">e.g. “add a README explaining what this project does”</p>
-            <p className="eg">Nothing gets changed on disk until you approve it.</p>
+            {/* Be straight about this: Grok's agent mode applies edits itself. */}
+            <p className="eg warn">Grok can change files here on its own. Use a folder you can undo — ideally one in git.</p>
           </div>
         )}
         {items.map((i) => {
@@ -423,13 +454,44 @@ function Diff({ oldText, newText }: { oldText: string; newText: string }) {
   );
 }
 
-function Splash({ title, line, children }: { title: string; line: string; children?: React.ReactNode }) {
+function Splash({
+  title,
+  line,
+  children,
+  banner,
+}: {
+  title: string;
+  line: string;
+  children?: React.ReactNode;
+  banner?: React.ReactNode;
+}) {
   return (
     <main className="splash">
+      {banner}
       <div className="mark" />
       <h1>{title}</h1>
       <p>{line}</p>
       {children}
     </main>
+  );
+}
+
+/// Shown on every screen when a newer release exists. Opt-in, never automatic.
+function UpdateBanner({
+  update,
+  busy,
+  onInstall,
+}: {
+  update: Update;
+  busy: boolean;
+  onInstall: () => void;
+}) {
+  return (
+    <div className="update">
+      <span>Version {update.version} is available.</span>
+      <button onClick={onInstall} disabled={busy}>
+        {busy ? "Updating…" : "Update & restart"}
+      </button>
+    </div>
   );
 }

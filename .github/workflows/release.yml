@@ -73,6 +73,10 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater artifacts. Without these the build still produces
+          # installers, but auto-update won't verify and is effectively off.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Grok Build Desktop ${{ github.ref_name }}"
@@ -81,12 +85,19 @@ jobs:
             **Install Grok Build**. No terminal needed.
 
             - **macOS** — `.dmg` (pick Apple Silicon or Intel)
-            - **Windows** — `.msi`
-            - **Linux** — `.AppImage` or `.deb`
+            - **Windows** — `.exe` installer or `.msi`
+            - **Linux** — `.AppImage`, `.deb` or `.rpm`
 
-            > These builds are not yet code-signed, so macOS Gatekeeper and
+            > **Heads up:** Grok edits files in the folder you open without asking
+            > first. Point it at a folder under version control so you can undo.
+            > See "Known limits" in the README.
+
+            > These builds are not code-signed yet, so macOS Gatekeeper and
             > Windows SmartScreen will warn on first open. On macOS:
-            > right-click the app → Open. Signing is tracked in the roadmap.
-          releaseDraft: true
+            > right-click the app → Open. Signing is on the roadmap.
+          # Published, not a draft — a draft release is invisible to everyone,
+          # which is exactly how v0.1.0 ended up with no visible download.
+          releaseDraft: false
           prerelease: false
+          includeUpdaterJson: true
           args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}

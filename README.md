@@ -13,8 +13,8 @@ click **Sign in**, pick a folder, and type what you want in plain English. No te
 no `npm install`, no API keys to hunt down, no config files.
 
 > **Status: early.** The app installs the CLI, signs you in, opens a folder, and streams
-> a real answer back. Visual diff approval, run history, and signed installers are next —
-> see the roadmap below.
+> real answers and live tool activity back. See [Known limits](#known-limits) before you
+> point it at anything precious.
 
 ## What it does
 
@@ -50,18 +50,33 @@ npm install
 npm run tauri dev
 ```
 
+## Known limits
+
+**Grok edits files without asking first.** This is the big one, and it's worth being
+precise about. `grok agent stdio` executes its tools directly — verified against
+grok 0.2.101: prompting it to rewrite a file rewrote the file, with no
+`session/request_permission` ever sent and `yolo: false` on the session. So the agent
+mode this app drives has no built-in per-edit approval step to hook into.
+
+The real gate is Grok's [hooks](https://github.com/xai-org/grok-build) system: a
+`PreToolUse` hook can deny a tool call, and hooks can call an HTTP endpoint. Wiring
+that back into this app is the next thing to build. Until then, **use this on a folder
+under version control**, so you can always `git diff` and undo.
+
+The client code already handles `session/request_permission` if the agent ever does send
+it — that path just doesn't fire today.
+
 ## Roadmap
 
 - [x] Auto-install the Grok Build CLI from inside the app
 - [x] Browser sign-in (ACP `authenticate`)
 - [x] Folder picker → session → streamed answers + live tool cards
-- [ ] **Visual diff approval** — Approve/Reject each file edit before it lands
+- [x] Recent projects, read from the CLI's own session store
+- [x] Installers built by CI for macOS / Windows / Linux
+- [ ] **Approval before edits** — via a `PreToolUse` hook bridged back to the app
 - [ ] Plan timeline, run history, cost display
-- [ ] Signed `.dmg` / `.msi` / `.AppImage` on GitHub Releases + auto-update
-
-Right now the app auto-approves tool calls so a turn can complete end-to-end. The diff
-approval UI replaces that — it's the next thing to land, and the reason the ACP interface
-was chosen over the simpler headless mode.
+- [ ] Code-signed builds (no Gatekeeper/SmartScreen warning)
+- [ ] Optional `XAI_API_KEY` sign-in for people using API credits
 
 ## Credits
 

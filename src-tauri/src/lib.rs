@@ -326,7 +326,8 @@ fn recent_projects() -> Vec<Project> {
         .collect();
 
     projects.sort_by(|a, b| b.last_used.cmp(&a.last_used));
-    projects.truncate(8);
+    // The list scrolls, so keep more than fits on screen.
+    projects.truncate(50);
     projects
 }
 
@@ -567,9 +568,16 @@ fn cancel(state: State<AcpState>) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    builder
         .manage(AcpState::default())
         .invoke_handler(tauri::generate_handler![
             grok_installed,
