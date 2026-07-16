@@ -357,6 +357,54 @@ printf '{"decision":"deny","reason":"Approval timed out (no answer from Grok Bui
 exit 0
 "#;
 
+#[cfg(windows)]
+const HOOK_SCRIPT_PS1: &str = r#"$ErrorActionPreference = "SilentlyContinue"
+$payload = [Console]::In.ReadToEnd()
+$bridge = Join-Path $env:USERPROFILE ".grok\gbd-bridge"
+
+# Extract scalar fields from the prefix BEFORE "toolInput" so model-controlled
+# content inside toolInput can't spoof toolName/sessionId.
+$head = $payload
+$cut = $payload.IndexOf('"toolInput"')
+if ($cut -ge 0) { $head = $payload.Substring(0, $cut) }
+function Get-Field($name) {
+  $m = [regex]::Match($head, ('"' + $name + '":"([^"]*)"'))
+  if ($m.Success) { return $m.Groups[1].Value }
+  return ""
+}
+$sid  = Get-Field "sessionId"
+$tool = Get-Field "toolName"
+$tuid = Get-Field "toolUseId"
+
+# Not an app-owned session -> never gate.
+if ([string]::IsNullOrEmpty($sid) -or -not (Test-Path (Join-Path $bridge "live\$sid"))) {
+  [Console]::Out.Write('{"decision":"allow"}'); exit 0
+}
+# Local read-only tools pass automatically. Keep in sync with READONLY_TOOLS.
+$allow = @("read_file","list_dir","grep","search_tool","get_command_or_subagent_output","monitor_status")
+if ($allow -contains $tool) { [Console]::Out.Write('{"decision":"allow"}'); exit 0 }
+
+if ([string]::IsNullOrEmpty($tuid)) { $tuid = "req-$PID-" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+$req  = Join-Path $bridge "req\$tuid.json"
+$resp = Join-Path $bridge "resp\$tuid.json"
+[System.IO.File]::WriteAllText("$req.tmp", $payload)
+Move-Item -Force "$req.tmp" $req
+
+$i = 0
+while ($i -lt 5000) {
+  if (Test-Path $resp) {
+    [Console]::Out.Write([System.IO.File]::ReadAllText($resp))
+    Remove-Item -Force $resp, $req
+    exit 0
+  }
+  Start-Sleep -Milliseconds 100
+  $i++
+}
+Remove-Item -Force $req
+[Console]::Out.Write('{"decision":"deny","reason":"Approval timed out (no answer from Grok Build Desktop)."}')
+exit 0
+"#;
+
 fn bridge_root() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".grok/gbd-bridge"))
 }
@@ -365,9 +413,8 @@ fn basename(path: &str) -> String {
     path.rsplit(['/', '\\']).next().filter(|s| !s.is_empty()).unwrap_or(path).to_string()
 }
 
-/// Install (or refresh) the global PreToolUse hook. Unix only for now — the sh
-/// script needs a POSIX shell; Windows approval is a follow-up. Best-effort:
-/// a failure here just means no gate, which is the pre-existing behavior.
+/// Install (or refresh) the global PreToolUse hook. Best-effort: a failure here
+/// just means no gate, which is the pre-existing behavior.
 #[cfg(unix)]
 fn install_approval_hook() -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
@@ -386,10 +433,28 @@ fn install_approval_hook() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn install_approval_hook() -> Result<(), String> {
-    Ok(()) // Windows: edit approval is a follow-up (the sh hook needs a POSIX shell).
+    let hooks = home_dir().ok_or("no home dir")?.join(".grok/hooks");
+    std::fs::create_dir_all(&hooks).map_err(|e| e.to_string())?;
+    let script = hooks.join("gbd-approval.ps1");
+    std::fs::write(&script, HOOK_SCRIPT_PS1).map_err(|e| e.to_string())?;
+    // Run the .ps1 via PowerShell; JSON-encode the whole command string so the
+    // path's backslashes/spaces are escaped correctly in the hook config.
+    let command = format!(
+        "powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+        script.to_string_lossy()
+    );
+    let cfg = format!(
+        r#"{{"hooks":{{"PreToolUse":[{{"hooks":[{{"type":"command","command":{},"timeout":600}}]}}]}}}}"#,
+        serde_json::to_string(&command).map_err(|e| e.to_string())?
+    );
+    std::fs::write(hooks.join("gbd-approval.json"), cfg).map_err(|e| e.to_string())?;
+    Ok(())
 }
+
+#[cfg(not(any(unix, windows)))]
+fn install_approval_hook() -> Result<(), String> { Ok(()) }
 
 /// Turn a raw hook payload into the `acp-permission` shape the webview already
 /// renders (PermissionCard). Mutating tools get a diff or command preview.
