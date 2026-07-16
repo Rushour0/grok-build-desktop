@@ -83,6 +83,17 @@ struct Project {
     last_used: u64,
 }
 
+#[derive(Serialize)]
+struct SessionMeta {
+    id: String,
+    title: String,
+    summary: String,
+    cwd: String,
+    created_at: String,
+    updated_at: String,
+    num_messages: u64,
+}
+
 fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -596,6 +607,181 @@ fn recent_projects() -> Vec<Project> {
 }
 
 #[tauri::command]
+fn list_sessions(cwd: Option<String>) -> Vec<SessionMeta> {
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+    let Ok(project_entries) = std::fs::read_dir(home.join(".grok/sessions")) else {
+        return Vec::new();
+    };
+
+    let mut sessions = Vec::new();
+    for project_entry in project_entries.flatten().filter(|entry| entry.path().is_dir()) {
+        let folder_cwd = percent_decode(&project_entry.file_name().to_string_lossy());
+        if cwd
+            .as_deref()
+            .is_some_and(|filter| filter != folder_cwd.as_str())
+        {
+            continue;
+        }
+
+        let Ok(session_entries) = std::fs::read_dir(project_entry.path()) else {
+            continue;
+        };
+        for session_entry in session_entries.flatten().filter(|entry| entry.path().is_dir()) {
+            let Ok(text) = std::fs::read_to_string(session_entry.path().join("summary.json")) else {
+                continue;
+            };
+            let Ok(summary_json) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+
+            let session_dir_name = session_entry.file_name().to_string_lossy().into_owned();
+            let session_summary = summary_json
+                .get("session_summary")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let title = summary_json
+                .get("generated_title")
+                .and_then(Value::as_str)
+                .or_else(|| summary_json.get("session_summary").and_then(Value::as_str))
+                .unwrap_or("(untitled)")
+                .to_string();
+            let info = summary_json.get("info");
+
+            sessions.push(SessionMeta {
+                id: info
+                    .and_then(|value| value.get("id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(&session_dir_name)
+                    .to_string(),
+                title,
+                summary: session_summary.to_string(),
+                cwd: info
+                    .and_then(|value| value.get("cwd"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(&folder_cwd)
+                    .to_string(),
+                created_at: summary_json
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                updated_at: summary_json
+                    .get("updated_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                num_messages: summary_json
+                    .get("num_chat_messages")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            });
+        }
+    }
+
+    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    sessions
+}
+
+#[tauri::command]
+fn load_session_updates(cwd: String, session_id: String) -> Vec<serde_json::Value> {
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+    let Ok(project_entries) = std::fs::read_dir(home.join(".grok/sessions")) else {
+        return Vec::new();
+    };
+    let Some(project_dir) = project_entries
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .find(|entry| percent_decode(&entry.file_name().to_string_lossy()) == cwd)
+        .map(|entry| entry.path())
+    else {
+        return Vec::new();
+    };
+    let Ok(file) = std::fs::File::open(project_dir.join(session_id).join("updates.jsonl")) else {
+        return Vec::new();
+    };
+
+    BufReader::new(file)
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
+        .filter(|message| message.get("method").and_then(Value::as_str) == Some("session/update"))
+        .filter_map(|message| message.get("params")?.get("update").cloned())
+        .collect()
+}
+
+#[tauri::command]
+fn search_sessions(query: String, cwd: Option<String>) -> Vec<String> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+    let Ok(project_entries) = std::fs::read_dir(home.join(".grok/sessions")) else {
+        return Vec::new();
+    };
+
+    let mut matches = Vec::new();
+    for project_entry in project_entries.flatten().filter(|entry| entry.path().is_dir()) {
+        let folder_cwd = percent_decode(&project_entry.file_name().to_string_lossy());
+        if cwd
+            .as_deref()
+            .is_some_and(|filter| filter != folder_cwd.as_str())
+        {
+            continue;
+        }
+
+        let Ok(session_entries) = std::fs::read_dir(project_entry.path()) else {
+            continue;
+        };
+        for session_entry in session_entries.flatten().filter(|entry| entry.path().is_dir()) {
+            let Ok(text) = std::fs::read_to_string(session_entry.path().join("summary.json")) else {
+                continue;
+            };
+            let Ok(summary_json) = serde_json::from_str::<Value>(&text) else {
+                continue;
+            };
+
+            let title_matches = summary_json
+                .get("generated_title")
+                .and_then(Value::as_str)
+                .is_some_and(|title| title.to_lowercase().contains(&query));
+            let summary_matches = summary_json
+                .get("session_summary")
+                .and_then(Value::as_str)
+                .is_some_and(|summary| summary.to_lowercase().contains(&query));
+            let history_matches = if title_matches || summary_matches {
+                false
+            } else {
+                std::fs::read_to_string(session_entry.path().join("chat_history.jsonl"))
+                    .map(|history| history.to_lowercase().contains(&query))
+                    .unwrap_or(false)
+            };
+
+            if title_matches || summary_matches || history_matches {
+                let session_dir_name = session_entry.file_name().to_string_lossy().into_owned();
+                matches.push(
+                    summary_json
+                        .get("info")
+                        .and_then(|value| value.get("id"))
+                        .and_then(Value::as_str)
+                        .unwrap_or(&session_dir_name)
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    matches
+}
+
+#[tauri::command]
 fn grok_installed() -> bool {
     resolve_grok().is_some()
 }
@@ -854,6 +1040,9 @@ pub fn run() {
             auth_status,
             install_grok,
             recent_projects,
+            list_sessions,
+            load_session_updates,
+            search_sessions,
             connect,
             authenticate,
             open_session,

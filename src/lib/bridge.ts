@@ -29,10 +29,25 @@ export interface Project {
   last_used: number;
 }
 
+export interface SessionMeta {
+  id: string;
+  title: string;
+  summary: string;
+  cwd: string;
+  created_at: string;
+  updated_at: string;
+  num_messages: number;
+}
+
 export const authStatus = () => invoke<AuthStatus>("auth_status");
 export const installGrok = () => invoke<string>("install_grok");
 /// Recent projects, read out of the Grok CLI's own session store.
 export const recentProjects = () => invoke<Project[]>("recent_projects");
+export const listSessions = (cwd?: string) => invoke<SessionMeta[]>("list_sessions", { cwd });
+export const loadSessionUpdates = (cwd: string, sessionId: string) =>
+  invoke<SessionUpdate[]>("load_session_updates", { cwd, sessionId });
+export const searchSessions = (query: string, cwd?: string) =>
+  invoke<string[]>("search_sessions", { query, cwd });
 export const connect = (cwd: string) => invoke<ConnectResult>("connect", { cwd });
 export const authenticate = (methodId: string) => invoke<void>("authenticate", { methodId });
 export const openSession = (cwd: string) => invoke<string>("open_session", { cwd });
