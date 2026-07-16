@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -221,6 +222,7 @@ export default function App() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const transcriptRequest = useRef(0);
   const tabsRef = useRef(tabs);
+  const addRunRef = useRef<() => Promise<void>>(async () => {});
   // Chunks stream in one fragment at a time; keep appending to the same bubble
   // until something else happens rather than making a bubble per fragment.
   const openBubbles = useRef<Map<string, { answer?: string; thought?: string }>>(new Map());
@@ -320,6 +322,25 @@ export default function App() {
     check()
       .then((u) => u && setUpdate(u))
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+
+    listen("tray-new-chat", () => {
+      void addRunRef.current();
+    })
+      .then((stopListening) => {
+        if (cancelled) stopListening();
+        else unlisten = stopListening;
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -578,6 +599,8 @@ export default function App() {
     const tab = addTab();
     await openFolder(tab.id, folder);
   }
+
+  addRunRef.current = addRun;
 
   async function signIn(tab: Tab, methodId: string) {
     setNotice("A browser window will open — finish signing in there.");
