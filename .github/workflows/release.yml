@@ -156,6 +156,9 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # This job does not check out the repo, so every gh call needs an explicit
+      # --repo; without it gh errors "not a git repository" and the gate misfires.
+      REPO: ${{ github.repository }}
 
     steps:
       - name: Verify updater manifest and publish release
@@ -166,13 +169,13 @@ jobs:
           TAG="$GITHUB_REF_NAME"
           VERSION="${TAG#v}"
 
-          if ! gh release view "$TAG" --json isDraft --jq '.isDraft' | grep -qx true; then
+          if ! gh release view "$TAG" --repo "$REPO" --json isDraft --jq '.isDraft' | grep -qx true; then
             echo "Refusing to publish: release '$TAG' is not a draft." >&2
             exit 1
           fi
 
           mkdir release-assets
-          gh release download "$TAG" --pattern latest.json --dir release-assets
+          gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir release-assets
 
           if ! jq -e --arg version "$VERSION" '
             .version == $version
@@ -186,4 +189,4 @@ jobs:
             exit 1
           fi
 
-          gh release edit "$TAG" --draft=false
+          gh release edit "$TAG" --repo "$REPO" --draft=false
