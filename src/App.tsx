@@ -29,6 +29,7 @@ import {
   type AuthMethod,
   type PermissionRequest,
   type Project,
+  type SearchHit,
   type SessionMeta,
   type SessionUpdate,
 } from "./lib/bridge";
@@ -313,6 +314,94 @@ export function sessionDate(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
 }
 
+/// The markers Rust wraps matched terms in (see `SNIPPET_OPEN`/`SNIPPET_CLOSE`).
+/// Control characters, not brackets, so a literal `[TODO]` quoted out of a transcript
+/// can't be mistaken for a hit.
+const SNIPPET_OPEN = "";
+const SNIPPET_CLOSE = "";
+
+/// One run of snippet text; `mark` is a term the query actually matched.
+export interface SnippetPart {
+  text: string;
+  mark: boolean;
+}
+
+/// Split a snippet into plain and matched runs, dropping the markers.
+///
+/// This is why the snippet crosses the wire as delimited text and not as HTML: the
+/// content is verbatim text from the user's own conversations, so building markup from
+/// it in Rust and injecting it here would be an HTML-injection hole in exchange for
+/// nothing. React escapes each run as an ordinary string.
+///
+/// Unbalanced markers can't throw — a snippet is quoted prose, and the renderer must
+/// never be the thing that breaks the sidebar. An unclosed run simply reads to the end.
+export function splitSnippet(snippet: string): SnippetPart[] {
+  const parts: SnippetPart[] = [];
+  const push = (text: string, mark: boolean) => {
+    if (text) parts.push({ text, mark });
+  };
+
+  // Everything before the first `open` is plain; every chunk after one begins a match
+  // that runs until its `close`. Keyed off the chunk INDEX, not off what's been pushed
+  // so far: a snippet starting with a marker makes the first chunk empty, and using
+  // `parts.length` as a stand-in for "first chunk" silently mis-flags that leading match
+  // as plain text.
+  snippet.split(SNIPPET_OPEN).forEach((chunk, index) => {
+    if (index === 0) {
+      // A `close` with no `open` before it is stray: keep the words, drop the marker.
+      push(chunk.split(SNIPPET_CLOSE).join(""), false);
+      return;
+    }
+    const [marked, ...rest] = chunk.split(SNIPPET_CLOSE);
+    push(marked, true);
+    push(rest.join(SNIPPET_CLOSE), false);
+  });
+  return parts;
+}
+
+/// A sidebar row: the conversation, plus the evidence for why it's on screen.
+export interface SessionRow {
+  session: SessionMeta;
+  snippet: string | null;
+}
+
+/// Turn a search answer into the rows to render, in the order to render them.
+///
+/// Rust owns the ranking (title hits first, then content by bm25), so this maps ids back
+/// to sessions IN HIT ORDER rather than re-sorting. Re-deriving an order here would be a
+/// second opinion about relevance that could quietly disagree with the one that did the
+/// searching.
+///
+///   * no query        -> every conversation, unfiltered.
+///   * `hits === null` -> the search itself failed. Fall back to a local title filter so
+///                        the sidebar still works; the caller shows the error, because a
+///                        short list presented as the whole answer is the deceptive case.
+///   * otherwise       -> the hits, in order. A hit naming a conversation this window
+///                        doesn't know is dropped: we can't render a row for a session
+///                        we have no title or date for.
+export function sessionRows(
+  sessions: SessionMeta[],
+  hits: SearchHit[] | null,
+  query: string,
+): SessionRow[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return sessions.map((session) => ({ session, snippet: null }));
+
+  if (hits === null) {
+    return sessions
+      .filter((session) => session.title.toLocaleLowerCase().includes(needle))
+      .map((session) => ({ session, snippet: null }));
+  }
+
+  const byId = new Map(sessions.map((session) => [session.id, session]));
+  const rows: SessionRow[] = [];
+  for (const hit of hits) {
+    const session = byId.get(hit.id);
+    if (session) rows.push({ session, snippet: hit.snippet });
+  }
+  return rows;
+}
+
 export default function App() {
   const [stage, setStage] = useState<Stage>("checking");
   /// This window's project, straight from Rust. `null` is a launcher window.
@@ -328,7 +417,10 @@ export default function App() {
   const [historySessions, setHistorySessions] = useState<SessionMeta[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyQuery, setHistoryQuery] = useState("");
-  const [historySearchIds, setHistorySearchIds] = useState<string[]>([]);
+  // `null` means "the backend gave us no usable answer" (the search hasn't run, or the
+  // whole command rejected) — distinct from `[]`, which is a real "nothing matched".
+  // Only the null case falls back to the local title filter.
+  const [historySearchHits, setHistorySearchHits] = useState<SearchHit[] | null>(null);
   const [historySearching, setHistorySearching] = useState(false);
   const [historySearchError, setHistorySearchError] = useState<string | null>(null);
   const [historyListError, setHistoryListError] = useState<string | null>(null);
@@ -519,7 +611,7 @@ export default function App() {
   useEffect(() => {
     if (stage !== "ready" && stage !== "chat") return;
     const query = historyQuery.trim();
-    setHistorySearchIds([]);
+    setHistorySearchHits(null);
     setHistorySearchError(null);
     if (!query) {
       setHistorySearching(false);
@@ -530,10 +622,12 @@ export default function App() {
     setHistorySearching(true);
     const timer = window.setTimeout(() => {
       searchSessions(query, projectCwd ?? undefined)
-        .then((ids) => {
+        .then((results) => {
           if (!cancelled) {
-            setHistorySearchIds(ids);
-            setHistorySearchError(null);
+            // A degraded search still has real title hits in `hits` — take them AND
+            // show the warning. The two are not alternatives.
+            setHistorySearchHits(results.hits);
+            setHistorySearchError(results.content_error);
           }
         })
         .catch((error) => {
@@ -541,7 +635,7 @@ export default function App() {
           // local title filter told the user "No matches" — a flat lie about
           // conversations that are sitting right there on disk.
           if (!cancelled) {
-            setHistorySearchIds([]);
+            setHistorySearchHits(null);
             setHistorySearchError(`Couldn't search conversation contents: ${error}`);
           }
         })
@@ -1294,15 +1388,7 @@ export default function App() {
   }
 
   const query = historyQuery.trim().toLocaleLowerCase();
-  const contentMatches = new Set(historySearchIds);
-  const filteredSessions = query
-    ? historySessions.filter(
-        (session) =>
-          session.title.toLocaleLowerCase().includes(query) ||
-          session.summary.toLocaleLowerCase().includes(query) ||
-          contentMatches.has(session.id),
-      )
-    : historySessions;
+  const filteredSessions = sessionRows(historySessions, historySearchHits, query);
 
   // Which conversations are open in a tab of this window, and which one you're
   // looking at. Derived from the tabs themselves — a second source of truth here
@@ -1364,7 +1450,10 @@ export default function App() {
                   {query
                     ? historySearching
                       ? "Searching…"
-                      : // Only titles were actually searched, so that's all we claim.
+                      : // When content search couldn't run, only titles were actually
+                        // searched — so that is all we may claim. Saying "No matches"
+                        // here would be a statement about conversation contents that
+                        // nothing ever looked at.
                         historySearchError
                         ? "No title matches"
                         : "No matches"
@@ -1378,7 +1467,7 @@ export default function App() {
               )}
             {(!historyLoading || historySessions.length > 0) &&
               !historyListError &&
-              filteredSessions.map((session) => {
+              filteredSessions.map(({ session, snippet }) => {
                 const isActive = activeSessionId === session.id;
                 const isOpen = openIds.has(session.id);
                 return (
@@ -1390,6 +1479,21 @@ export default function App() {
                     aria-current={isActive ? "page" : undefined}
                   >
                     <strong>{session.title || "Untitled conversation"}</strong>
+                    {/* Why this row is here. Without it a content search is a wall of
+                        identical "Untitled conversation" rows — 33 of 50 conversations
+                        have no title — with nothing to tell them apart. One line, clipped:
+                        this is a scent, not a preview. */}
+                    {snippet && (
+                      <span className="side-row-snippet">
+                        {splitSnippet(snippet).map((part, index) =>
+                          part.mark ? (
+                            <mark key={index}>{part.text}</mark>
+                          ) : (
+                            <span key={index}>{part.text}</span>
+                          ),
+                        )}
+                      </span>
+                    )}
                     <span className="side-row-meta">
                       {/* The folder only earns its space in a launcher, where the
                           list spans every project. In a project window it's the

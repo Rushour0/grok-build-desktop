@@ -1702,7 +1702,17 @@ fn list_sessions_inner(cwd: Option<String>) -> Vec<SessionMeta> {
     let Some(home) = home_dir() else {
         return Vec::new();
     };
-    let Ok(project_entries) = std::fs::read_dir(home.join(".grok/sessions")) else {
+    list_sessions_at(&home.join(".grok/sessions"), cwd)
+}
+
+/// The walk itself, pointed at an explicit store root.
+///
+/// Split from `list_sessions_inner` for one reason: `home_dir()` is the machine's real
+/// `~`, so with the root baked in there was no way to test the walk without reading the
+/// user's actual conversations. Every caller in the app still passes `~/.grok/sessions`;
+/// only tests point it at a temp dir.
+fn list_sessions_at(root: &Path, cwd: Option<String>) -> Vec<SessionMeta> {
+    let Ok(project_entries) = std::fs::read_dir(root) else {
         return Vec::new();
     };
 
@@ -1733,7 +1743,7 @@ fn list_sessions_inner(cwd: Option<String>) -> Vec<SessionMeta> {
                 .get("generated_title")
                 .and_then(Value::as_str)
                 .or_else(|| summary_json.get("session_summary").and_then(Value::as_str))
-                .unwrap_or("(untitled)")
+                .unwrap_or(UNTITLED)
                 .to_string();
             let info = summary_json.get("info");
 
@@ -1772,75 +1782,246 @@ fn list_sessions_inner(cwd: Option<String>) -> Vec<SessionMeta> {
     sessions
 }
 
-#[tauri::command]
-async fn search_sessions(query: String, cwd: Option<String>) -> Vec<String> {
-    tauri::async_runtime::spawn_blocking(move || search_sessions_inner(query, cwd))
-        .await
-        .unwrap_or_default()
+/// One conversation that matched, and WHY it matched.
+///
+/// The "why" is half the feature, not decoration. The old search returned bare ids: with
+/// 33 of 50 conversations carrying no `generated_title` they all render as an identical
+/// "Untitled conversation", so a result list was a wall of the same row with nothing to
+/// tell them apart and no way to see what the query had hit.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+struct SearchHit {
+    id: String,
+    /// The matched text with its surroundings, each hit term wrapped in
+    /// `SNIPPET_OPEN`/`SNIPPET_CLOSE` — FTS5's `snippet()` output, rendered as emphasis
+    /// by the frontend. `None` for a title hit: the title IS the evidence and it's
+    /// already the row's headline, so repeating it underneath would be noise.
+    snippet: Option<String>,
+    /// True when the row's own visible title contains the query. Title hits sort first.
+    from_title: bool,
 }
 
-fn search_sessions_inner(query: String, cwd: Option<String>) -> Vec<String> {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return Vec::new();
-    }
+/// The answer to one search: the hits, plus whether the content half actually ran.
+///
+/// `content_error` is the point of the struct. Content search reads an index we do not
+/// own and cannot repair — it can be missing, locked, or a schema we don't know. If that
+/// were folded into an empty `hits` the UI would render "No matches", which is a lie
+/// about conversations sitting on disk. Title hits are computed independently and are
+/// still returned alongside the error, so a degraded search is a SHORTER answer with a
+/// warning, never a wrong one.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+struct SearchResults {
+    hits: Vec<SearchHit>,
+    content_error: Option<String>,
+}
 
+/// What a conversation is called when it has no name of its own. OURS, not the user's
+/// data — which is exactly why title search has to know about it (see `search_sessions_at`).
+/// On this machine 36 of 53 conversations land here: grok writes `generated_title` and
+/// `session_summary` lazily, and most sessions never get either.
+const UNTITLED: &str = "(untitled)";
+
+/// How `snippet()` marks the matched terms inside a snippet.
+///
+/// STX/ETX rather than the obvious `[`/`]`. The snippet is verbatim transcript text, and
+/// transcripts are full of real brackets — every markdown link and array index — so with
+/// `[`/`]` the frontend could not tell a match from text that merely looked like one, and
+/// would emphasise the wrong words. These two control characters cannot occur in the
+/// prose being quoted, so the marking is unambiguous. They never reach the DOM: the
+/// frontend splits on them and drops them (see `splitSnippet`).
+const SNIPPET_OPEN: char = '\u{2}';
+const SNIPPET_CLOSE: char = '\u{3}';
+
+/// The schema this code was written against. `session_search.sqlite` belongs to the grok
+/// CLI, not to us; if it moves to a shape we don't understand, degrade rather than guess
+/// at columns that may have changed meaning.
+const SESSION_SEARCH_SCHEMA_VERSION: &str = "4";
+
+/// Turn a user's raw words into an FTS5 phrase query.
+///
+/// Everything gets wrapped in one double-quoted phrase, and any `"` inside is doubled.
+/// This does two jobs at once:
+///   * It makes the search LITERAL and word-tokenized, which is the actual bug fix.
+///     The old code did a substring grep, so "data" hit `data`base, meta`data` and
+///     vali`data`ted, and matched 48 of 48 conversations. As a phrase, "data" matches
+///     the word `data` and nothing else.
+///   * It neutralises FTS5's query syntax. Unescaped, a user typing `AND`, `*`, `:` or
+///     an unbalanced quote is either a syntax error or, worse, a silently different
+///     search than the one they typed. Inside a quoted phrase all of it is just text.
+fn fts_phrase_query(query: &str) -> String {
+    format!("\"{}\"", query.replace('"', "\"\""))
+}
+
+#[tauri::command]
+async fn search_sessions(query: String, cwd: Option<String>) -> SearchResults {
+    // A store walk plus a SQLite query is blocking work, so it does NOT belong on a tokio
+    // worker (v0.8.4). A JoinError can't become an empty result here — that's the exact
+    // "silent empty list" this feature exists to kill — so it degrades with a reason.
+    tauri::async_runtime::spawn_blocking(move || search_sessions_inner(query, cwd))
+        .await
+        .unwrap_or_else(|e| SearchResults {
+            hits: Vec::new(),
+            content_error: Some(format!("The search didn't finish: {e}")),
+        })
+}
+
+fn search_sessions_inner(query: String, cwd: Option<String>) -> SearchResults {
     let Some(home) = home_dir() else {
-        return Vec::new();
+        return SearchResults {
+            hits: Vec::new(),
+            content_error: Some("Couldn't find your home folder.".to_string()),
+        };
     };
-    let Ok(project_entries) = std::fs::read_dir(home.join(".grok/sessions")) else {
-        return Vec::new();
-    };
+    search_sessions_at(&home.join(".grok/sessions"), &query, cwd.as_deref())
+}
 
-    let mut matches = Vec::new();
-    for project_entry in project_entries.flatten().filter(|entry| entry.path().is_dir()) {
-        let folder_cwd = percent_decode(&project_entry.file_name().to_string_lossy());
-        if cwd_filter_excludes(cwd.as_deref(), &folder_cwd) {
+/// Search, pointed at an explicit store root. See `list_sessions_at` for why the root is
+/// a parameter.
+///
+/// TITLE FIRST, and the two halves are deliberately independent:
+///
+///   1. Titles come from `summary.json` via the same walk that builds the sidebar. No
+///      index involved, 100% coverage.
+///   2. Content comes from grok's own FTS5 index — ranked, word-tokenized, with snippets.
+///
+/// That split is not a style choice. The index is LAZY and races: 51 of 53 conversations
+/// are indexed here, and the 2 that aren't are not empty (one has 31 messages). Content
+/// search therefore misses ~4% of conversations, which is only acceptable because title
+/// search covers every one of them independently. Route titles through the index to save
+/// a walk and a conversation the indexer missed becomes unfindable by any means.
+fn search_sessions_at(root: &Path, query: &str, cwd: Option<&str>) -> SearchResults {
+    let query = query.trim();
+    if query.is_empty() {
+        return SearchResults { hits: Vec::new(), content_error: None };
+    }
+
+    // --- 1. Titles: from data we already have. ---------------------------------------
+    // Match the title the row actually DISPLAYS (`list_sessions_at` already resolves
+    // generated_title -> session_summary -> "(untitled)"). The old code also matched
+    // `session_summary` when a `generated_title` existed and hid it — a row whose visible
+    // text does not contain your query, with nothing to explain itself. That is the same
+    // "why did this match?" bug in a smaller costume.
+    let needle = query.to_lowercase();
+    let sessions = list_sessions_at(root, cwd.map(str::to_string));
+    let mut hits: Vec<SearchHit> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for session in sessions {
+        // `UNTITLED` is OUR placeholder, not the user's text, and 36 of 53 conversations
+        // carry it. Matching it would make the query "untitled" return all 36 as one
+        // indistinguishable block — the very wall of identical rows this change exists to
+        // break up, rebuilt out of a string we invented. A conversation with no title has
+        // nothing for a title search to match; the content half still covers it.
+        if session.title == UNTITLED {
             continue;
         }
-
-        let Ok(session_entries) = std::fs::read_dir(project_entry.path()) else {
-            continue;
-        };
-        for session_entry in session_entries.flatten().filter(|entry| entry.path().is_dir()) {
-            let Ok(text) = std::fs::read_to_string(session_entry.path().join("summary.json")) else {
-                continue;
-            };
-            let Ok(summary_json) = serde_json::from_str::<Value>(&text) else {
-                continue;
-            };
-
-            let title_matches = summary_json
-                .get("generated_title")
-                .and_then(Value::as_str)
-                .is_some_and(|title| title.to_lowercase().contains(&query));
-            let summary_matches = summary_json
-                .get("session_summary")
-                .and_then(Value::as_str)
-                .is_some_and(|summary| summary.to_lowercase().contains(&query));
-            let history_matches = if title_matches || summary_matches {
-                false
-            } else {
-                std::fs::read_to_string(session_entry.path().join("chat_history.jsonl"))
-                    .map(|history| history.to_lowercase().contains(&query))
-                    .unwrap_or(false)
-            };
-
-            if title_matches || summary_matches || history_matches {
-                let session_dir_name = session_entry.file_name().to_string_lossy().into_owned();
-                matches.push(
-                    summary_json
-                        .get("info")
-                        .and_then(|value| value.get("id"))
-                        .and_then(Value::as_str)
-                        .unwrap_or(&session_dir_name)
-                        .to_string(),
-                );
-            }
+        if session.title.to_lowercase().contains(&needle) {
+            seen.insert(session.id.clone());
+            hits.push(SearchHit { id: session.id, snippet: None, from_title: true });
         }
     }
 
-    matches
+    // --- 2. Content: grok's FTS5 index. ----------------------------------------------
+    let content_error = match search_content(root, query, cwd) {
+        Ok(found) => {
+            // Ranked below every title hit, and never duplicating one.
+            hits.extend(found.into_iter().filter(|hit| !seen.contains(&hit.id)));
+            None
+        }
+        Err(e) => Some(e),
+    };
+
+    SearchResults { hits, content_error }
+}
+
+/// Query grok's FTS5 index. `Err` means "content search could not run", and the caller
+/// must surface it — never swallow it into an empty list.
+fn search_content(root: &Path, query: &str, cwd: Option<&str>) -> Result<Vec<SearchHit>, String> {
+    let db = root.join("session_search.sqlite");
+    if !db.is_file() {
+        return Err("Content search is unavailable — Grok hasn't built its search index yet. Titles are still searched.".to_string());
+    }
+
+    // READ-ONLY, and that matters: this is the CLI's database and grok may be writing to
+    // it right now. `mode=ro` means a bug here can never corrupt the user's history. The
+    // index is journal_mode=wal, so our reads and grok's writes coexist; `busy_timeout`
+    // covers the brief exclusive locks WAL still takes (e.g. checkpointing) instead of
+    // failing the search outright.
+    let uri = format!("file:{}?mode=ro", db.display());
+    let conn = rusqlite::Connection::open_with_flags(
+        &uri,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| format!("Content search is unavailable — couldn't open the search index: {e}"))?;
+    conn.busy_timeout(Duration::from_millis(2000))
+        .map_err(|e| format!("Content search is unavailable — couldn't open the search index: {e}"))?;
+
+    let version: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = 'session_search_schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    if version.as_deref() != Some(SESSION_SEARCH_SCHEMA_VERSION) {
+        // Not an error to hide: a newer grok could rename columns under us, and guessing
+        // is how you return confidently wrong results.
+        return Err(format!(
+            "Content search is unavailable — Grok's search index is version {}, and this app understands version {}. Titles are still searched.",
+            version.as_deref().unwrap_or("unknown"),
+            SESSION_SEARCH_SCHEMA_VERSION,
+        ));
+    }
+
+    // bm25() is NEGATIVE and lower is better, so ORDER BY rank ASC is best-first. Title
+    // is weighted 10x content: within the content half, a conversation whose indexed
+    // title carries the query still outranks a passing mention in a transcript.
+    //
+    // The cwd compare is EXACT, matching `cwd_filter_excludes` — see the note there. It
+    // is correct here for a verified reason: `session_docs.cwd` is byte-identical to the
+    // percent-decoded store folder name for all 51 indexed conversations on this machine,
+    // because grok writes the same string to both. It is NOT canonicalized. `/private/tmp`
+    // shows up as a cwd not because `/tmp` was resolved, but because `%2Fprivate%2Ftmp`
+    // is its own folder with its own conversations — `%2Ftmp` exists separately, holding
+    // different ones. Canonicalizing either side to "fix" the symlink would MERGE two
+    // projects the store deliberately keeps apart, and break the filter it was meant to
+    // repair.
+    let mut stmt = conn
+        .prepare(
+            "SELECT d.session_id, snippet(session_docs_fts, 1, ?3, ?4, '…', 8)
+             FROM session_docs_fts f
+             JOIN session_docs d ON d.rowid = f.rowid
+             WHERE session_docs_fts MATCH ?1
+               AND (?2 IS NULL OR d.cwd = ?2)
+             ORDER BY bm25(session_docs_fts, 10.0, 1.0)
+             LIMIT 200",
+        )
+        .map_err(|e| format!("Content search is unavailable — the search index rejected the query: {e}"))?;
+
+    let rows = stmt
+        // The delimiters are BOUND, not written into the SQL, so `SNIPPET_OPEN`/
+        // `SNIPPET_CLOSE` are the single source of truth the frontend's `splitSnippet`
+        // is matched against. Spelled as `char(2)` in the query text they'd be a second,
+        // silent copy of the contract that a change to the constants wouldn't reach.
+        .query_map(
+            rusqlite::params![
+                fts_phrase_query(query),
+                cwd,
+                SNIPPET_OPEN.to_string(),
+                SNIPPET_CLOSE.to_string(),
+            ],
+            |row| {
+                let id: String = row.get(0)?;
+                let snippet: Option<String> = row.get(1)?;
+                Ok(SearchHit {
+                    id,
+                    snippet: snippet.filter(|s| !s.trim().is_empty()),
+                    from_title: false,
+                })
+            },
+        )
+        .map_err(|e| format!("Content search is unavailable — the search index rejected the query: {e}"))?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("Content search is unavailable — couldn't read the search index: {e}"))
 }
 
 /// Both of these call `resolve_grok`, whose PATH fallback is an UNBOUNDED
@@ -2760,9 +2941,12 @@ mod tests {
     //     and cannot be built in a test. `take_window` is the generic seam under it and is
     //     tested exhaustively; `drain_window` adds only the poison-tolerant lock.
     //   * `list_sessions_inner` / `search_sessions_inner` / `recent_projects_inner`: these
-    //     read the REAL `~/.grok/sessions` store. Tests must never touch a user's data, and
-    //     there is no root parameter to point elsewhere. `cwd_filter_excludes` was split out
-    //     so the one subtle thing in them — the exact string compare — is testable alone.
+    //     resolve `home_dir()` and so read the REAL `~/.grok/sessions` store. Tests must
+    //     never touch a user's data. `list_sessions_at` / `search_sessions_at` are the same
+    //     code with the root as a PARAMETER and are tested exhaustively against a temp store
+    //     built by `store()` below; the `_inner` fns add only the `home_dir()` join.
+    //     `recent_projects_inner` keeps the old shape, so `cwd_filter_excludes` remains the
+    //     seam for the one subtle thing in it — the exact string compare.
     //   * `write_decision` / `install_approval_hook` / `sweep_live_markers`: all write into
     //     the user's real `~/.grok`. Same rule.
     //   * `resolve_grok` / `home_dir`: probe the machine and the environment. Mutating `HOME`
@@ -4735,6 +4919,557 @@ mod tests {
                 "needs_auth": true,
                 "auth_methods": [{"id": "grok.com"}],
                 "session_id": null
+            })
+        );
+    }
+
+    // ---- search: the store fixture ---------------------------------------------------
+    //
+    // Every test below builds a REAL store in a temp dir — percent-encoded project folders,
+    // summary.json files, and a session_search.sqlite carrying grok's actual schema. None of
+    // them can see `~/.grok`: `search_sessions_at` takes the root as a parameter and these
+    // never pass anything but the fixture. That is the whole reason the root was lifted out.
+
+    /// A temp directory that deletes itself. Hand-rolled rather than pulling in `tempfile`:
+    /// rusqlite is the only dependency this change is allowed to add.
+    struct TempStore(PathBuf);
+
+    impl TempStore {
+        fn new() -> TempStore {
+            // pid + an atomic counter: unique across concurrent test binaries AND across the
+            // threads cargo runs tests on.
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "gbd-search-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("temp store");
+            TempStore(path)
+        }
+
+        fn root(&self) -> &Path {
+            &self.0
+        }
+
+        /// Percent-encode just enough to name a project folder the way the CLI does.
+        fn encode(cwd: &str) -> String {
+            cwd.replace('%', "%25").replace('/', "%2F").replace(' ', "%20")
+        }
+
+        /// Write one conversation into the store, exactly as the CLI lays it out.
+        /// `title: None` is the common case the bug report is about — 33 of 50 real
+        /// conversations have no `generated_title`.
+        fn session(&self, cwd: &str, id: &str, title: Option<&str>, updated_at: &str) -> &TempStore {
+            let dir = self.0.join(TempStore::encode(cwd)).join(id);
+            std::fs::create_dir_all(&dir).expect("session dir");
+            let mut summary = json!({
+                "info": {"id": id, "cwd": cwd},
+                "session_summary": "",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": updated_at,
+                "num_chat_messages": 4,
+            });
+            if let Some(title) = title {
+                summary["generated_title"] = json!(title);
+            }
+            std::fs::write(dir.join("summary.json"), summary.to_string()).expect("summary.json");
+            self
+        }
+
+        /// Build the FTS5 index with grok's real schema (verified against the live file:
+        /// schema version 4, content= external-content table, ai/ad/au triggers).
+        /// `version` is a parameter so the degrade path has something to trip on.
+        fn index(&self, version: &str, docs: &[(&str, &str, &str, &str)]) -> &TempStore {
+            let conn = rusqlite::Connection::open(self.0.join("session_search.sqlite")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE session_docs (
+                     session_id TEXT PRIMARY KEY, cwd TEXT NOT NULL, updated_at INTEGER NOT NULL,
+                     title TEXT NOT NULL, content TEXT NOT NULL, content_hash TEXT NOT NULL,
+                     last_indexed_offset INTEGER NOT NULL DEFAULT 0);
+                 CREATE VIRTUAL TABLE session_docs_fts USING fts5(
+                     title, content, content='session_docs', content_rowid='rowid');
+                 CREATE TRIGGER ai AFTER INSERT ON session_docs BEGIN
+                     INSERT INTO session_docs_fts(rowid, title, content)
+                     VALUES (new.rowid, new.title, new.content);
+                 END;",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('session_search_schema_version', ?1)",
+                [version],
+            )
+            .unwrap();
+            for (session_id, cwd, title, content) in docs {
+                conn.execute(
+                    "INSERT INTO session_docs (session_id, cwd, updated_at, title, content, content_hash)
+                     VALUES (?1, ?2, 0, ?3, ?4, '')",
+                    rusqlite::params![session_id, cwd, title, content],
+                )
+                .unwrap();
+            }
+            self
+        }
+    }
+
+    impl Drop for TempStore {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn ids(results: &SearchResults) -> Vec<&str> {
+        results.hits.iter().map(|hit| hit.id.as_str()).collect()
+    }
+
+    // ---- search: the bug itself ------------------------------------------------------
+
+    /// THE BUG, pinned. The old search was a substring grep over each conversation's
+    /// transcript, so "data" matched `data`base / meta`data` / vali`data`ted and returned
+    /// 48 of 48 conversations — every row, no signal. Through FTS5 the query is a
+    /// tokenized phrase, so it matches the WORD `data` and only the word.
+    #[test]
+    fn content_search_matches_words_not_substrings() {
+        let store = TempStore::new();
+        store
+            .session("/repo", "hit", None, "2026-01-02")
+            .session("/repo", "substring", None, "2026-01-01")
+            .index(
+                "4",
+                &[
+                    ("hit", "/repo", "", "we should store the data somewhere"),
+                    ("substring", "/repo", "", "the database was validated with metadata"),
+                ],
+            );
+
+        let found = search_sessions_at(store.root(), "data", None);
+        assert_eq!(found.content_error, None);
+        assert_eq!(
+            ids(&found),
+            vec!["hit"],
+            "`database`/`metadata`/`validated` contain `data` as a SUBSTRING; only the real word counts"
+        );
+    }
+
+    /// The other half of the same bug: a hit had no evidence attached, so a wall of
+    /// identically-titled "Untitled conversation" rows was unreadable. Every content hit
+    /// carries a snippet with the matched term delimited.
+    #[test]
+    fn content_hits_carry_a_snippet_marking_the_match() {
+        let store = TempStore::new();
+        store.session("/repo", "s1", None, "2026-01-01").index(
+            "4",
+            &[("s1", "/repo", "", "we should store the data somewhere safe")],
+        );
+
+        let found = search_sessions_at(store.root(), "data", None);
+        let snippet = found.hits[0].snippet.as_deref().expect("a content hit must explain itself");
+        assert!(
+            snippet.contains(&format!("{SNIPPET_OPEN}data{SNIPPET_CLOSE}")),
+            "the matched term is delimited: {snippet:?}"
+        );
+        assert!(snippet.contains("store the"), "and it carries the surrounding context");
+        assert!(!found.hits[0].from_title);
+    }
+
+    /// The snippet marks MATCHES, and must stay distinguishable from prose that merely
+    /// looks like a marker. Transcripts are full of real brackets — markdown links, array
+    /// indices — so `[`/`]` delimiters would make a literal `[TODO]` in a transcript
+    /// indistinguishable from a hit, and the frontend would emphasise the wrong words.
+    /// STX/ETX cannot occur in the quoted prose.
+    #[test]
+    fn snippet_markers_cannot_be_confused_with_brackets_in_the_transcript() {
+        let store = TempStore::new();
+        store.session("/repo", "s1", None, "2026-01-01").index(
+            "4",
+            &[("s1", "/repo", "", "see [the docs](url) about parser internals")],
+        );
+
+        let snippet = search_sessions_at(store.root(), "parser", None).hits[0]
+            .snippet
+            .clone()
+            .expect("a content hit must explain itself");
+        assert!(snippet.contains("[the docs]"), "the transcript's own brackets survive: {snippet:?}");
+        assert_eq!(
+            snippet.matches(SNIPPET_OPEN).count(),
+            1,
+            "exactly one marked term — the bracketed prose is NOT marked: {snippet:?}"
+        );
+    }
+
+    // ---- search: title first, and independent of the index ---------------------------
+
+    /// The load-bearing property of the whole design. grok's indexer is LAZY and races —
+    /// 2 of 53 real conversations are unindexed, and one of them has 31 messages. Title
+    /// matching therefore must NOT go through the index, or a conversation the indexer
+    /// missed becomes unfindable by any means. This conversation is absent from the index
+    /// entirely and must still be found by its title.
+    #[test]
+    fn title_search_finds_a_conversation_the_index_never_saw() {
+        let store = TempStore::new();
+        store
+            .session("/repo", "indexed", None, "2026-01-01")
+            .session("/repo", "never-indexed", Some("Migrate the parser"), "2026-01-02")
+            // `never-indexed` is deliberately NOT in this list — that is the ~4% case.
+            .index("4", &[("indexed", "/repo", "", "nothing relevant here")]);
+
+        let found = search_sessions_at(store.root(), "parser", None);
+        assert_eq!(ids(&found), vec!["never-indexed"]);
+        assert_eq!(found.content_error, None, "a healthy index that simply lags is not an error");
+    }
+
+    /// Title hits rank ABOVE content hits — "do a title search mainly, then priority to
+    /// full content". The content hit here would win on bm25 alone (it's a dense match);
+    /// it still sorts second.
+    #[test]
+    fn title_hits_outrank_content_hits() {
+        let store = TempStore::new();
+        store
+            .session("/repo", "by-content", None, "2026-01-09")
+            .session("/repo", "by-title", Some("The parser rewrite"), "2026-01-01")
+            .index(
+                "4",
+                &[
+                    ("by-content", "/repo", "", "parser parser parser parser parser"),
+                    ("by-title", "/repo", "The parser rewrite", "unrelated prose"),
+                ],
+            );
+
+        let found = search_sessions_at(store.root(), "parser", None);
+        assert_eq!(ids(&found), vec!["by-title", "by-content"]);
+        assert!(found.hits[0].from_title);
+        assert!(!found.hits[1].from_title);
+    }
+
+    /// A conversation that matches BOTH halves appears once, as a title hit. Two rows for
+    /// one conversation would be a new bug in a feature about legibility.
+    #[test]
+    fn a_conversation_matching_both_halves_appears_once() {
+        let store = TempStore::new();
+        store.session("/repo", "both", Some("The parser rewrite"), "2026-01-01").index(
+            "4",
+            &[("both", "/repo", "The parser rewrite", "the parser is slow")],
+        );
+
+        let found = search_sessions_at(store.root(), "parser", None);
+        assert_eq!(ids(&found), vec!["both"]);
+        assert!(found.hits[0].from_title);
+        assert_eq!(
+            found.hits[0].snippet, None,
+            "the title is already the row's headline; repeating it underneath is noise"
+        );
+    }
+
+    /// Title matching reads the title the row actually DISPLAYS. `list_sessions_at` falls
+    /// back generated_title -> session_summary, and a conversation with no title at all is
+    /// findable by the summary text that is standing in for one.
+    #[test]
+    fn title_search_reads_the_title_the_row_displays() {
+        let store = TempStore::new();
+        store.session("/repo", "fallback", None, "2026-01-01");
+        // No generated_title; session_summary is what the sidebar shows instead.
+        let dir = store.root().join(TempStore::encode("/repo")).join("fallback");
+        std::fs::write(
+            dir.join("summary.json"),
+            json!({
+                "info": {"id": "fallback", "cwd": "/repo"},
+                "session_summary": "Refactoring the tokenizer",
+                "updated_at": "2026-01-01",
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let found = search_sessions_at(store.root(), "tokenizer", None);
+        assert_eq!(ids(&found), vec!["fallback"], "the visible text matched, so the row explains itself");
+    }
+
+    /// A nameless conversation has NOTHING for a title search to match — and the row it
+    /// draws must not be matchable by the words we put in it on its behalf.
+    ///
+    /// The real shape, verified against the live store: for the 36 of 53 conversations
+    /// with no name, `generated_title` is ABSENT while `session_summary` is PRESENT AND
+    /// EMPTY. So the title resolves to `""` (which is why the sidebar's
+    /// `title || "Untitled conversation"` fallback is what the user actually sees), and an
+    /// empty title matches no query. `UNTITLED` is only reached when a summary.json has
+    /// neither key — covered below, because that path is live code and would otherwise
+    /// make "untitled" match every nameless conversation at once.
+    #[test]
+    fn a_nameless_conversation_is_not_matchable_by_the_words_we_gave_it() {
+        let store = TempStore::new();
+        store
+            // The real-world shape: session_summary present, empty.
+            .session("/repo", "nameless", None, "2026-01-01")
+            .session("/repo", "real", Some("Untitled draft notes"), "2026-01-03")
+            .index("4", &[]);
+        // The shape that has neither key, which is what reaches the `UNTITLED` fallback.
+        let dir = store.root().join(TempStore::encode("/repo")).join("no-keys");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("summary.json"),
+            json!({"info": {"id": "no-keys", "cwd": "/repo"}, "updated_at": "2026-01-02"}).to_string(),
+        )
+        .unwrap();
+
+        // Both really are nameless, by the two different routes.
+        let listed = list_sessions_at(store.root(), Some("/repo".to_string()));
+        let title = |id: &str| listed.iter().find(|s| s.id == id).unwrap().title.clone();
+        assert_eq!(title("nameless"), "", "empty session_summary resolves to an empty title");
+        assert_eq!(title("no-keys"), UNTITLED, "neither key resolves to our placeholder");
+
+        assert_eq!(
+            ids(&search_sessions_at(store.root(), "untitled", None)),
+            vec!["real"],
+            "only the conversation a human actually named `Untitled draft notes` matches"
+        );
+        // And the empty title can't be matched by an empty-ish query either.
+        assert!(search_sessions_at(store.root(), "   ", None).hits.is_empty());
+    }
+
+    /// Title matching stays a case-insensitive LITERAL substring. Titles are short, and a
+    /// user typing part of one expects to see it; the substring bug was about grepping
+    /// whole TRANSCRIPTS, not about matching a headline.
+    #[test]
+    fn title_search_is_case_insensitive() {
+        let store = TempStore::new();
+        store.session("/repo", "s1", Some("Migrate The PARSER"), "2026-01-01");
+
+        for query in ["parser", "PARSER", "PaRsEr", "the parser"] {
+            assert_eq!(ids(&search_sessions_at(store.root(), query, None)), vec!["s1"], "query: {query}");
+        }
+    }
+
+    // ---- search: cwd scoping, and the /tmp vs /private/tmp trap -----------------------
+
+    /// The symlink trap, settled by evidence rather than by assumption.
+    ///
+    /// `session_docs.cwd` is NOT canonicalized: it is byte-identical to the percent-decoded
+    /// store folder name, because grok writes the same string to both. Verified against the
+    /// live store — all 51 indexed conversations match their folder exactly, zero mismatches.
+    /// `/private/tmp` appears there not as a resolved `/tmp`, but because `%2Fprivate%2Ftmp`
+    /// is its OWN project folder holding its OWN conversations, while `%2Ftmp` exists
+    /// separately holding different ones.
+    ///
+    /// So the exact string compare is right, and "fixing" the symlink by canonicalizing
+    /// either side would MERGE two projects the store deliberately keeps apart. This test
+    /// exists to fail if someone ever tries.
+    #[test]
+    fn tmp_and_private_tmp_are_different_projects_not_a_symlink_to_resolve() {
+        let store = TempStore::new();
+        store
+            .session("/tmp", "in-tmp", Some("Parser notes"), "2026-01-01")
+            .session("/private/tmp", "in-private-tmp", Some("Parser notes"), "2026-01-02")
+            .index(
+                "4",
+                &[
+                    ("in-tmp", "/tmp", "", "the parser lives here"),
+                    ("in-private-tmp", "/private/tmp", "", "the parser lives here"),
+                ],
+            );
+
+        assert_eq!(
+            ids(&search_sessions_at(store.root(), "parser", Some("/tmp"))),
+            vec!["in-tmp"],
+            "/tmp must not absorb /private/tmp's conversations"
+        );
+        assert_eq!(
+            ids(&search_sessions_at(store.root(), "parser", Some("/private/tmp"))),
+            vec!["in-private-tmp"],
+            "/private/tmp must not absorb /tmp's conversations"
+        );
+        // Unscoped sees both, newest folder-walk order first for the title half.
+        let all = search_sessions_at(store.root(), "parser", None);
+        assert_eq!(all.hits.len(), 2, "no filter, no exclusions");
+    }
+
+    /// The cwd filter applies to BOTH halves. If it were enforced on the title walk but not
+    /// on the SQL, a project window would leak other projects' conversations in through the
+    /// content half — visible only as extra rows, which is exactly the kind of thing nobody
+    /// notices.
+    #[test]
+    fn cwd_filter_scopes_the_content_half_too() {
+        let store = TempStore::new();
+        store
+            .session("/repo/a", "a1", None, "2026-01-01")
+            .session("/repo/b", "b1", None, "2026-01-02")
+            .index(
+                "4",
+                &[
+                    ("a1", "/repo/a", "", "the parser is here"),
+                    ("b1", "/repo/b", "", "the parser is here too"),
+                ],
+            );
+
+        assert_eq!(ids(&search_sessions_at(store.root(), "parser", Some("/repo/a"))), vec!["a1"]);
+        assert_eq!(ids(&search_sessions_at(store.root(), "parser", Some("/repo/b"))), vec!["b1"]);
+        assert!(
+            search_sessions_at(store.root(), "parser", Some("/repo/nope")).hits.is_empty(),
+            "a project with no conversations is empty, not everyone's"
+        );
+    }
+
+    // ---- search: the degrade path ----------------------------------------------------
+    //
+    // The one outcome that is NOT allowed is a silent empty list. Content search reads an
+    // index we don't own; when it can't run, title hits still stand and the failure is
+    // REPORTED.
+
+    /// No index on disk at all — a fresh install, or a grok too old to build one.
+    #[test]
+    fn a_missing_index_degrades_to_titles_and_says_so() {
+        let store = TempStore::new();
+        store.session("/repo", "s1", Some("Parser notes"), "2026-01-01");
+        // Deliberately no `.index(..)` call.
+
+        let found = search_sessions_at(store.root(), "parser", None);
+        assert_eq!(ids(&found), vec!["s1"], "the title half is independent and still answers");
+        let error = found.content_error.expect("a missing index must be REPORTED, never silent");
+        assert!(error.to_lowercase().contains("content search is unavailable"), "{error}");
+    }
+
+    /// A schema we don't understand. Guessing at columns whose meaning may have changed is
+    /// how you return confidently wrong results, so this degrades rather than adapts.
+    #[test]
+    fn an_unknown_schema_version_degrades_to_titles_and_says_so() {
+        let store = TempStore::new();
+        store
+            .session("/repo", "s1", Some("Parser notes"), "2026-01-01")
+            .index("5", &[("s1", "/repo", "", "the parser is here")]);
+
+        let found = search_sessions_at(store.root(), "parser", None);
+        assert_eq!(ids(&found), vec!["s1"]);
+        let error = found.content_error.expect("an unreadable index must be REPORTED");
+        assert!(error.contains('5') && error.contains('4'), "name both versions: {error}");
+    }
+
+    /// The degrade is not allowed to swallow the title half even when NOTHING matches a
+    /// title: the result is an empty list PLUS an error, which the UI must not render as
+    /// "No matches".
+    #[test]
+    fn a_degraded_search_with_no_title_hits_still_reports_the_error() {
+        let store = TempStore::new();
+        store.session("/repo", "s1", Some("Something else entirely"), "2026-01-01");
+
+        let found = search_sessions_at(store.root(), "parser", None);
+        assert!(found.hits.is_empty());
+        assert!(
+            found.content_error.is_some(),
+            "an empty list with no error reads as `No matches` — a lie about a search that never ran"
+        );
+    }
+
+    /// A corrupt/unreadable index file is a degrade, NOT a panic. A panic on the blocking
+    /// pool comes back as a JoinError, and the old `unwrap_or_default()` would have turned
+    /// that into an empty list — the silent failure again.
+    #[test]
+    fn a_corrupt_index_degrades_rather_than_panicking() {
+        let store = TempStore::new();
+        store.session("/repo", "s1", Some("Parser notes"), "2026-01-01");
+        std::fs::write(store.root().join("session_search.sqlite"), b"this is not a database").unwrap();
+
+        let found = search_sessions_at(store.root(), "parser", None);
+        assert_eq!(ids(&found), vec!["s1"]);
+        assert!(found.content_error.is_some(), "garbage on disk must be reported, not swallowed");
+    }
+
+    // ---- search: query handling ------------------------------------------------------
+
+    /// An empty or whitespace-only query is not a search. No hits, and NO error — there is
+    /// nothing wrong, so the UI must not light up a warning.
+    #[test]
+    fn an_empty_query_is_not_a_search_and_not_an_error() {
+        let store = TempStore::new();
+        store.session("/repo", "s1", Some("Parser"), "2026-01-01").index("4", &[]);
+
+        for query in ["", "   ", "\t\n"] {
+            let found = search_sessions_at(store.root(), query, None);
+            assert!(found.hits.is_empty(), "query {query:?}");
+            assert_eq!(found.content_error, None, "query {query:?} is blank, not broken");
+        }
+    }
+
+    /// Punctuation-only input tokenizes to nothing. It must read as "no content match",
+    /// never as "your index is broken" — alarm text about a healthy index is its own bug.
+    ///
+    /// This needs no special-casing on our side, which was worth checking rather than
+    /// assuming: FTS5 answers a phrase containing no tokens (`MATCH '"..."'`) with zero
+    /// rows and no error. An earlier draft carried a `has_searchable_token` guard here on
+    /// the belief that FTS5 raised a syntax error; it does not, the guard was dead code,
+    /// and removing it changed no behaviour this suite can observe.
+    #[test]
+    fn a_punctuation_only_query_is_not_an_index_failure() {
+        let store = TempStore::new();
+        store.session("/repo", "s1", None, "2026-01-01").index("4", &[("s1", "/repo", "", "hello")]);
+
+        for query in ["...", "???", "-", "%"] {
+            let found = search_sessions_at(store.root(), query, None);
+            assert_eq!(found.content_error, None, "query {query:?} is unsearchable, not broken");
+        }
+    }
+
+    /// FTS5 query syntax typed into a search box is TEXT, not operators. Unescaped, each of
+    /// these is either a syntax error or a silently different search than the one the user
+    /// typed — the second being far worse.
+    #[test]
+    fn fts_syntax_in_a_query_is_treated_as_literal_text() {
+        let store = TempStore::new();
+        store.session("/repo", "s1", None, "2026-01-01").index(
+            "4",
+            &[("s1", "/repo", "", "we discussed parser AND lexer design")],
+        );
+
+        for query in ["parser AND lexer", "parser OR lexer", "\"quoted\"", "parser*", "col:value", "("] {
+            let found = search_sessions_at(store.root(), query, None);
+            assert_eq!(found.content_error, None, "query {query:?} must not break the search");
+        }
+
+        // The literal phrase is what actually matches — proving the words weren't parsed
+        // as operators.
+        assert_eq!(ids(&search_sessions_at(store.root(), "parser AND lexer", None)), vec!["s1"]);
+        assert!(
+            search_sessions_at(store.root(), "lexer AND parser", None).hits.is_empty(),
+            "as a phrase, word order matters — this is a literal search, not a boolean one"
+        );
+    }
+
+    #[test]
+    fn fts_phrase_query_wraps_and_escapes() {
+        assert_eq!(fts_phrase_query("data"), "\"data\"");
+        assert_eq!(fts_phrase_query("parser AND lexer"), "\"parser AND lexer\"");
+        // The one that matters: a bare `"` would close the phrase and let the rest of the
+        // user's text be parsed as query syntax.
+        assert_eq!(fts_phrase_query("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(fts_phrase_query("\""), "\"\"\"\"");
+    }
+
+    // ---- search: the wire contract ---------------------------------------------------
+
+    /// The shape `bridge.ts` reads. Field names here and in `SearchHit`/`SearchResults` on
+    /// the TS side are one contract; a rename on either side is a silent empty sidebar.
+    #[test]
+    fn search_results_serialize_the_shape_the_frontend_reads() {
+        let json = serde_json::to_value(SearchResults {
+            hits: vec![
+                SearchHit { id: "a".into(), snippet: None, from_title: true },
+                SearchHit {
+                    id: "b".into(),
+                    snippet: Some(format!("the {SNIPPET_OPEN}data{SNIPPET_CLOSE} here")),
+                    from_title: false,
+                },
+            ],
+            content_error: Some("boom".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            json!({
+                "hits": [
+                    {"id": "a", "snippet": null, "from_title": true},
+                    {"id": "b", "snippet": "the \u{2}data\u{3} here", "from_title": false}
+                ],
+                "content_error": "boom"
             })
         );
     }

@@ -40,6 +40,30 @@ export interface SessionMeta {
   num_messages: number;
 }
 
+/// One conversation that matched a search, and WHY it matched.
+export interface SearchHit {
+  id: string;
+  /// The matched text in context, with `[`/`]` around the hit terms (FTS5's
+  /// `snippet()` output). The sidebar renders those as emphasis, never as literal
+  /// brackets — see `splitSnippet`. `null` for a title hit: the title is already
+  /// the row's headline, so repeating it underneath says nothing.
+  snippet: string | null;
+  /// The row's visible title contains the query. These sort above content hits.
+  from_title: boolean;
+}
+
+/// The answer to one search. `content_error` is the whole reason this isn't just an
+/// array: title matching is done locally from data we already have, but content
+/// matching reads an index owned by the grok CLI which can be missing, locked, or a
+/// schema we don't know. When that half can't run, the title hits are still real and
+/// still returned — so a degraded search is a SHORTER answer plus a warning, never an
+/// empty list. Rendering `hits: []` with a `content_error` as "No matches" would be a
+/// lie about conversations sitting on disk.
+export interface SearchResults {
+  hits: SearchHit[];
+  content_error: string | null;
+}
+
 /// What `openProject` did with the folder. Only `"adopted"` is actionable by the
 /// caller — it means *this* window had no project and has just taken this one, so
 /// it should render it. `"focused"` (already open elsewhere; that window was
@@ -81,8 +105,10 @@ export const shutdownAll = () => invoke<void>("shutdown_all");
 /// Omit `cwd` for every conversation on this machine; pass one to get only the
 /// conversations made in that folder.
 export const listSessions = (cwd?: string) => invoke<SessionMeta[]>("list_sessions", { cwd });
+/// Search conversations: titles (local, 100% coverage) unioned with content (grok's
+/// FTS5 index), title hits ranked first. Omit `cwd` to search every folder.
 export const searchSessions = (query: string, cwd?: string) =>
-  invoke<string[]>("search_sessions", { query, cwd });
+  invoke<SearchResults>("search_sessions", { query, cwd });
 export const connect = (tabId: string, cwd: string) => invoke<ConnectResult>("connect", { tabId, cwd });
 export const authenticate = (tabId: string, methodId: string) =>
   invoke<void>("authenticate", { tabId, methodId });
