@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Reply channels for client->agent requests we're still waiting on, keyed by JSON-RPC id.
 type Pending = Arc<Mutex<HashMap<i64, mpsc::Sender<Result<Value, String>>>>>;
@@ -44,6 +44,24 @@ struct Session {
     approval_stop: Arc<AtomicBool>,
 }
 
+/// Wake every caller blocked in `recv_timeout` on this session's pending map.
+///
+/// Killing the child does NOT do this on its own: the `Sender`s live INSIDE the
+/// map, and the map (an Arc held by the Session and by every in-flight caller)
+/// outlives the reader thread, so a dead agent drops nothing and the receiver
+/// waits out its full timeout — 30s for `initialize`, 60s for `session/new`.
+/// Every death path must call this, or Cancel leaves the UI stuck "connecting".
+fn drain_pending(pending: &Pending, reason: &str) {
+    // A poisoned map is still worth draining — the senders are the whole point.
+    let waiters = match pending.lock() {
+        Ok(mut p) => std::mem::take(&mut *p),
+        Err(e) => std::mem::take(&mut *e.into_inner()),
+    };
+    for (_, tx) in waiters {
+        let _ = tx.send(Err(reason.to_string()));
+    }
+}
+
 impl Session {
     fn kill(mut self) {
         // Stop the approval watcher and drop the live marker so the global hook
@@ -54,6 +72,32 @@ impl Session {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // The child is gone; anyone still waiting on it never gets an answer.
+        drain_pending(&self.pending, "Cancelled.");
+    }
+}
+
+/// Kill-on-drop ownership for a spawned child that has no owner yet.
+///
+/// Between `spawn` and the `Session` insert, a `Child` dropped by an early return
+/// (a `?`, a panic) leaves grok running forever: `std::process::Child`'s Drop does
+/// NOT kill. This is the same orphan class the connect-failure cleanup handles, on
+/// the paths that cleanup can't reach. `into_inner` disarms it at the handoff.
+struct ChildGuard(Option<Child>);
+
+impl ChildGuard {
+    /// Hand the child to its real owner; the guard stops being responsible for it.
+    fn into_inner(mut self) -> Child {
+        self.0.take().expect("ChildGuard::into_inner called twice")
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -62,7 +106,9 @@ struct AcpState {
     inner: Mutex<HashMap<String, Session>>,
 }
 
-#[derive(Serialize)]
+/// `Default` is the JoinError fallback for the `auth_status` command: if the probe
+/// thread dies we report "not installed, not signed in" rather than inventing state.
+#[derive(Serialize, Default)]
 struct AuthStatus {
     grok_installed: bool,
     grok_path: Option<String>,
@@ -250,6 +296,10 @@ fn spawn_reader(
                 }
             }
         }
+        // EOF: grok's stdout is closed, so no pending request can ever be answered.
+        // Wake the waiters here too — the agent crashing on its own has exactly the
+        // same shape as Cancel, and this thread's own Arc clone dropping wakes nobody.
+        drain_pending(&pending, "Grok stopped responding.");
         let _ = app.emit(
             "acp-closed",
             json!({"tabId": tab_id, "reason": "grok stopped"}),
@@ -266,6 +316,28 @@ fn spawn_stderr_drain(app: AppHandle, tab_id: String, stderr: ChildStderr) {
             }
         }
     });
+}
+
+/// `acp-connect {tabId, stage, sessionId?, message?}` — the text-only decoration for
+/// the connect/open-session wait. The command's promise stays the source of truth for
+/// state; these events only ever drive a status line.
+fn emit_connect(
+    app: &AppHandle,
+    tab_id: &str,
+    stage: &str,
+    session_id: Option<&str>,
+    message: Option<&str>,
+) {
+    let mut payload = json!({"tabId": tab_id, "stage": stage});
+    if let Some(obj) = payload.as_object_mut() {
+        if let Some(id) = session_id {
+            obj.insert("sessionId".into(), Value::String(id.to_string()));
+        }
+        if let Some(m) = message {
+            obj.insert("message".into(), Value::String(m.to_string()));
+        }
+    }
+    let _ = app.emit("acp-connect", payload);
 }
 
 fn is_auth_error(msg: &str) -> bool {
@@ -650,8 +722,19 @@ fn percent_decode(s: &str) -> String {
 
 /// The projects you've worked on before, read straight out of the Grok CLI's own
 /// session store — we keep no list of our own, so it can never drift from reality.
+/// The sharpest hazard in the file: it stats arbitrary historical user paths (a stale
+/// network mount can hang forever) and re-fires on every `stage -> "ready"`. On the
+/// blocking pool a hang costs one of 512 pool threads; on a tokio worker it would
+/// permanently retire one of `num_cpus`, and N cycles kill every other command.
 #[tauri::command]
-fn recent_projects() -> Vec<Project> {
+async fn recent_projects() -> Vec<Project> {
+    // JoinError -> empty list keeps the infallible signature the frontend expects.
+    tauri::async_runtime::spawn_blocking(recent_projects_inner)
+        .await
+        .unwrap_or_default()
+}
+
+fn recent_projects_inner() -> Vec<Project> {
     let Some(home) = home_dir() else {
         return Vec::new();
     };
@@ -690,7 +773,13 @@ fn recent_projects() -> Vec<Project> {
 }
 
 #[tauri::command]
-fn list_sessions(cwd: Option<String>) -> Vec<SessionMeta> {
+async fn list_sessions(cwd: Option<String>) -> Vec<SessionMeta> {
+    tauri::async_runtime::spawn_blocking(move || list_sessions_inner(cwd))
+        .await
+        .unwrap_or_default()
+}
+
+fn list_sessions_inner(cwd: Option<String>) -> Vec<SessionMeta> {
     let Some(home) = home_dir() else {
         return Vec::new();
     };
@@ -768,7 +857,13 @@ fn list_sessions(cwd: Option<String>) -> Vec<SessionMeta> {
 }
 
 #[tauri::command]
-fn load_session_updates(cwd: String, session_id: String) -> Vec<serde_json::Value> {
+async fn load_session_updates(cwd: String, session_id: String) -> Vec<serde_json::Value> {
+    tauri::async_runtime::spawn_blocking(move || load_session_updates_inner(cwd, session_id))
+        .await
+        .unwrap_or_default()
+}
+
+fn load_session_updates_inner(cwd: String, session_id: String) -> Vec<serde_json::Value> {
     let Some(home) = home_dir() else {
         return Vec::new();
     };
@@ -797,7 +892,13 @@ fn load_session_updates(cwd: String, session_id: String) -> Vec<serde_json::Valu
 }
 
 #[tauri::command]
-fn search_sessions(query: String, cwd: Option<String>) -> Vec<String> {
+async fn search_sessions(query: String, cwd: Option<String>) -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(move || search_sessions_inner(query, cwd))
+        .await
+        .unwrap_or_default()
+}
+
+fn search_sessions_inner(query: String, cwd: Option<String>) -> Vec<String> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
         return Vec::new();
@@ -864,13 +965,29 @@ fn search_sessions(query: String, cwd: Option<String>) -> Vec<String> {
     matches
 }
 
+/// Both of these call `resolve_grok`, whose PATH fallback is an UNBOUNDED
+/// `grok --version` wait on a child process. The frontend calls `auth_status` at
+/// startup, so on the main thread a hung grok on PATH freezes the app on launch.
 #[tauri::command]
-fn grok_installed() -> bool {
+async fn grok_installed() -> bool {
+    // JoinError -> false: if we couldn't even run the probe, we can't claim it's there.
+    tauri::async_runtime::spawn_blocking(grok_installed_inner)
+        .await
+        .unwrap_or_default()
+}
+
+fn grok_installed_inner() -> bool {
     resolve_grok().is_some()
 }
 
 #[tauri::command]
-fn auth_status() -> AuthStatus {
+async fn auth_status() -> AuthStatus {
+    tauri::async_runtime::spawn_blocking(auth_status_inner)
+        .await
+        .unwrap_or_default()
+}
+
+fn auth_status_inner() -> AuthStatus {
     let grok = resolve_grok();
     AuthStatus {
         grok_installed: grok.is_some(),
@@ -881,10 +998,131 @@ fn auth_status() -> AuthStatus {
     }
 }
 
+// ---- CLI install -------------------------------------------------------------
+
+/// One install at a time. `acp-install` is a global, uncorrelated event, so a second
+/// concurrent install would narrate over the first one's UI.
+static INSTALLING: AtomicBool = AtomicBool::new(false);
+
+/// Clears `INSTALLING` on every exit path, including `?` and panics.
+struct InstallGuard;
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        INSTALLING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// How many trailing installer lines to keep for a failure report.
+const INSTALL_TAIL_LINES: usize = 40;
+
+/// The marker after which install.sh's output is genuinely about installing. Lines
+/// before it are the shell's own noise and belong in the tail buffer, never in the
+/// status line the user reads.
+const INSTALL_MARKER: &str = "fetching latest";
+
+/// Decorative only — a coarse bucket for the status line's label. Never load-bearing:
+/// the honest content is `detail`, which is the installer's own line, verbatim.
+/// Bucket an install.sh stderr line into a coarse stage label.
+///
+/// Every arm below is matched against a line install.sh actually prints — checked
+/// against the real script, not inferred:
+///   "Fetching latest ${CHANNEL} version..."          -> resolving
+///   "  Downloading grok ${version}..."               -> downloading
+///   "  Updated $BIN_DIR in PATH in $config_file."    -> configuring
+///   "  Binary linked to ...", "Grok $v installed to" -> installing (the fallback)
+///
+/// Deliberately NO verifying/extracting arms: install.sh prints no such line (it
+/// downloads a bare binary — there is nothing to unpack, and its only integrity
+/// check is a silent `--version` smoke test). A bucket that can never fire is a
+/// stage we would be claiming exists. The label is decoration anyway — `detail`
+/// carries the script's real line verbatim — so the honest fallback is "installing".
+fn install_stage(line: &str) -> &'static str {
+    let l = line.to_lowercase();
+    if l.contains("fetching latest") {
+        "resolving"
+    } else if l.contains("downloading") {
+        "downloading"
+    } else if l.contains("path") {
+        "configuring"
+    } else {
+        "installing"
+    }
+}
+
+/// Emit `failed` with the tail as its detail, and hand back the error string. The
+/// three arms that OWN a running install share this; the reentrancy guard must not
+/// use it (see `install_grok_inner`).
+fn install_fail(app: &AppHandle, tail: &Arc<Mutex<Vec<String>>>, msg: &str) -> String {
+    let detail = tail
+        .lock()
+        .map(|t| t.join("\n"))
+        .unwrap_or_default();
+    let _ = app.emit("acp-install", json!({"status": "failed", "detail": detail}));
+    if detail.is_empty() {
+        msg.to_string()
+    } else {
+        format!("{msg}\n{detail}")
+    }
+}
+
+/// Pump one of the installer's pipes: everything lands in the shared tail buffer;
+/// only the rendering reader (stderr) turns lines into `acp-install` stage events.
+fn spawn_install_reader<R: std::io::Read + Send + 'static>(
+    app: AppHandle,
+    stream: R,
+    tail: Arc<Mutex<Vec<String>>>,
+    render: bool,
+    seen_marker: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        for line in BufReader::new(stream).lines().map_while(Result::ok) {
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(mut t) = tail.lock() {
+                t.push(line.clone());
+                let overflow = t.len().saturating_sub(INSTALL_TAIL_LINES);
+                if overflow > 0 {
+                    t.drain(0..overflow);
+                }
+            }
+            if !render {
+                continue;
+            }
+            if line.to_lowercase().contains(INSTALL_MARKER) {
+                seen_marker.store(true, Ordering::SeqCst);
+            }
+            // Nothing before the marker is trustworthy as "install progress".
+            if !seen_marker.load(Ordering::SeqCst) {
+                continue;
+            }
+            let _ = app.emit(
+                "acp-install",
+                json!({"status": "stage", "stage": install_stage(&line), "detail": line}),
+            );
+        }
+    })
+}
+
 /// Download and install the Grok Build CLI via xAI's official installer.
 /// The user should never have to open a terminal to get started.
 #[tauri::command]
-fn install_grok(app: AppHandle) -> Result<String, String> {
+async fn install_grok(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || install_grok_inner(app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn install_grok_inner(app: AppHandle) -> Result<String, String> {
+    // First statement, strictly before the `started` emit. A rejected second click
+    // must NOT emit `failed`: `acp-install` carries no correlation id, so the
+    // rejection would tear down the UI of the install that IS running.
+    if INSTALLING.swap(true, Ordering::SeqCst) {
+        return Err("An install is already running.".to_string());
+    }
+    let _guard = InstallGuard;
+
     let _ = app.emit("acp-install", json!({"status": "started"}));
 
     #[cfg(windows)]
@@ -896,27 +1134,108 @@ fn install_grok(app: AppHandle) -> Result<String, String> {
     #[cfg(not(windows))]
     let mut cmd = {
         let mut c = Command::new("bash");
-        c.args(["-lc", "curl -fsSL https://x.ai/cli/install.sh | bash"]);
+        // `bash -c`, NOT `-lc`: a login shell sources the user's dotfiles, and their
+        // shell banners would be streamed to the user as "install progress".
+        // `set -o pipefail`: without it `curl … | bash` exits 0 when curl 404s,
+        // because the pipeline's status is bash's, and bash happily runs nothing.
+        c.args(["-c", "set -o pipefail; curl -fsSL https://x.ai/cli/install.sh | bash"]);
         c
     };
 
-    let out = cmd
-        .output()
-        .map_err(|e| format!("Couldn't run the Grok installer: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let tail: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-    if !out.status.success() {
-        let _ = app.emit("acp-install", json!({"status": "failed", "detail": stderr}));
-        return Err(format!("The Grok installer failed:\n{stderr}"));
+    let mut child = match cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return Err(install_fail(
+                &app,
+                &tail,
+                &format!("Couldn't run the Grok installer: {e}"),
+            ))
+        }
+    };
+
+    let seen_marker = Arc::new(AtomicBool::new(false));
+    // Every user-facing line install.sh prints goes to stderr — streaming stdout
+    // would give a permanently empty status line. stdout is drained anyway so a
+    // full pipe buffer can't wedge the installer, and kept for diagnostics.
+    let stdout_reader = child.stdout.take().map(|s| {
+        spawn_install_reader(app.clone(), s, tail.clone(), false, seen_marker.clone())
+    });
+    let stderr_reader = child.stderr.take().map(|s| {
+        spawn_install_reader(app.clone(), s, tail.clone(), true, seen_marker.clone())
+    });
+
+    // Single-owner poll loop: two threads cannot both hold `&mut Child`, and an
+    // `Arc<Mutex<Child>>` deadlocks because `wait()` would hold the guard.
+    let deadline = std::time::Instant::now() + Duration::from_secs(600);
+    let mut timed_out = false;
+    let mut wait_err: Option<String> = None;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(e) => {
+                wait_err = Some(format!("Lost track of the Grok installer: {e}"));
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            timed_out = true;
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+
+    // The kill/exit EOFs both pipes, so the readers finish on their own.
+    if let Some(h) = stdout_reader {
+        let _ = h.join();
     }
+    if let Some(h) = stderr_reader {
+        let _ = h.join();
+    }
+
+    match status {
+        Some(s) if s.success() => {}
+        Some(_) => return Err(install_fail(&app, &tail, "The Grok installer failed:")),
+        None if timed_out => {
+            return Err(install_fail(
+                &app,
+                &tail,
+                "The Grok installer didn't finish within 10 minutes, so we stopped waiting. \
+                 We only stopped the shell we started — the download itself may still be \
+                 finishing in the background. Give it a minute, then try again.",
+            ))
+        }
+        None => {
+            return Err(install_fail(
+                &app,
+                &tail,
+                &wait_err.unwrap_or_else(|| "The Grok installer stopped unexpectedly.".to_string()),
+            ))
+        }
+    }
+
     match resolve_grok() {
         Some(p) => {
             let _ = app.emit("acp-install", json!({"status": "done"}));
             Ok(p.to_string_lossy().into_owned())
         }
-        None => Err(format!(
-            "The installer finished but `grok` still isn't where we expect it.\n{stdout}"
+        // This arm owns the install and used to fail silently — no `failed` event,
+        // so the UI kept pulsing forever.
+        None => Err(install_fail(
+            &app,
+            &tail,
+            "The installer finished but `grok` still isn't where we expect it.",
         )),
     }
 }
@@ -924,12 +1243,21 @@ fn install_grok(app: AppHandle) -> Result<String, String> {
 /// Spawn `grok agent stdio` in `cwd`, do the ACP handshake, and try to open a session.
 /// If the agent demands sign-in, report that instead of failing — the UI drives `authenticate`.
 #[tauri::command]
-fn connect(
-    app: AppHandle,
-    state: State<AcpState>,
-    tab_id: String,
-    cwd: String,
-) -> Result<ConnectResult, String> {
+async fn connect(app: AppHandle, tab_id: String, cwd: String) -> Result<ConnectResult, String> {
+    tauri::async_runtime::spawn_blocking(move || connect_blocking(app, tab_id, cwd))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn connect_blocking(app: AppHandle, tab_id: String, cwd: String) -> Result<ConnectResult, String> {
+    // First statement, before the reconnect kill and before resolve_grok(): every
+    // slow case (gatekeeper, a cold binary, the unbounded `grok --version` probe in
+    // resolve_grok) happens inside or before resolve, so emitting later would make
+    // this stage unreachable exactly when it's the one worth showing.
+    emit_connect(&app, &tab_id, "spawning", None, None);
+
+    let state = app.state::<AcpState>();
+
     let existing = state
         .inner
         .lock()
@@ -957,9 +1285,24 @@ fn connect(
         .spawn()
         .map_err(|e| format!("Couldn't start `grok agent stdio` ({e})."))?;
 
-    let stdin = Arc::new(Mutex::new(child.stdin.take().ok_or("grok gave us no stdin")?));
-    let stdout = child.stdout.take().ok_or("grok gave us no stdout")?;
-    if let Some(stderr) = child.stderr.take() {
+    // `Child` has no killing `Drop`, so ANY early return between here and the
+    // Session insert below would leak a live grok — including the `?` on a poisoned
+    // state lock, which no explicit cleanup arm can cover. The guard owns the child
+    // until `into_inner` hands it to the one owner that can kill it: the Session.
+    let stdio = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    let guard = ChildGuard(Some(child));
+    let (stdin, stdout, stderr) = match stdio {
+        (Some(i), Some(o), e) => (i, o, e),
+        _ => {
+            drop(guard); // kills and reaps
+            let msg = "grok gave us no stdio".to_string();
+            emit_connect(&app, &tab_id, "failed", None, Some(&msg));
+            return Err(msg);
+        }
+    };
+
+    let stdin = Arc::new(Mutex::new(stdin));
+    if let Some(stderr) = stderr {
         spawn_stderr_drain(app.clone(), tab_id.clone(), stderr);
     }
 
@@ -973,61 +1316,110 @@ fn connect(
         pending.clone(),
     );
 
-    // We don't advertise fs capabilities: grok uses its own file tools rather than
-    // asking us to read/write on its behalf. It does NOT ask permission over ACP —
-    // approval is enforced out-of-band by our PreToolUse hook (see start_approval).
-    let rx = request(
-        &stdin,
-        &pending,
-        &next_id,
-        "initialize",
-        json!({
-            "protocolVersion": 1,
-            "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}}
-        }),
-    )?;
-    let init = rx
-        .recv_timeout(Duration::from_secs(30))
-        .map_err(|_| "grok didn't answer `initialize` in time".to_string())??;
+    // Insert the Session the moment the process and its reader exist, so every
+    // failure below has exactly one owner that can kill it. The Arcs are CLONED —
+    // `child` moves, but stdin/pending/next_id are still needed for the handshake.
+    {
+        // If this `?` fires, `guard` is still alive and its Drop kills the child.
+        let mut map = state.inner.lock().map_err(|e| e.to_string())?;
+        // Non-destructive: a racing connect for the same tab must not orphan the
+        // session it displaces (double-click the folder button).
+        if let Some(old) = map.insert(
+            tab_id.clone(),
+            Session {
+                tab_id: tab_id.clone(),
+                child: guard.into_inner(),
+                stdin: stdin.clone(),
+                session_id: None,
+                next_id: next_id.clone(),
+                pending: pending.clone(),
+                approval_stop: Arc::new(AtomicBool::new(false)),
+            },
+        ) {
+            drop(map);
+            old.kill();
+        }
+    }
 
-    let auth_methods = init
-        .get("authMethods")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let handshake = || -> Result<ConnectResult, String> {
+        emit_connect(&app, &tab_id, "handshaking", None, None);
 
-    state.inner.lock().map_err(|e| e.to_string())?.insert(
-        tab_id.clone(),
-        Session {
-            tab_id: tab_id.clone(),
-            child,
-            stdin,
-            session_id: None,
-            next_id,
-            pending,
-            approval_stop: Arc::new(AtomicBool::new(false)),
-        },
-    );
+        // We don't advertise fs capabilities: grok uses its own file tools rather than
+        // asking us to read/write on its behalf. It does NOT ask permission over ACP —
+        // approval is enforced out-of-band by our PreToolUse hook (see start_approval).
+        let rx = request(
+            &stdin,
+            &pending,
+            &next_id,
+            "initialize",
+            json!({
+                "protocolVersion": 1,
+                "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}}
+            }),
+        )?;
+        let init = rx
+            .recv_timeout(Duration::from_secs(30))
+            .map_err(|_| "grok didn't answer `initialize` in time".to_string())??;
 
-    // Try for a session; a fresh install will bounce us to sign-in instead.
-    match new_session(&app, &state, &tab_id, &cwd)? {
-        Ok(session_id) => Ok(ConnectResult {
-            needs_auth: false,
-            auth_methods,
-            session_id: Some(session_id),
-        }),
-        Err(e) if is_auth_error(&e) => Ok(ConnectResult {
-            needs_auth: true,
-            auth_methods,
-            session_id: None,
-        }),
-        Err(e) => Err(e),
+        let auth_methods = init
+            .get("authMethods")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+
+        emit_connect(&app, &tab_id, "session", None, None);
+
+        // Try for a session; a fresh install will bounce us to sign-in instead.
+        match new_session(&app, &state, &tab_id, &cwd)? {
+            Ok(session_id) => {
+                emit_connect(&app, &tab_id, "ready", Some(&session_id), None);
+                Ok(ConnectResult {
+                    needs_auth: false,
+                    auth_methods,
+                    session_id: Some(session_id),
+                })
+            }
+            Err(e) if is_auth_error(&e) => {
+                emit_connect(&app, &tab_id, "needs_auth", None, None);
+                Ok(ConnectResult {
+                    needs_auth: true,
+                    auth_methods,
+                    session_id: None,
+                })
+            }
+            Err(e) => Err(e),
+        }
+    };
+
+    let outcome = handshake();
+    match outcome {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            // The one cleanup path: a failed connect must not leave grok running.
+            let orphan = state.inner.lock().ok().and_then(|mut g| g.remove(&tab_id));
+            if let Some(orphan) = orphan {
+                orphan.kill();
+            }
+            emit_connect(&app, &tab_id, "failed", None, Some(&e));
+            Err(e)
+        }
     }
 }
 
-/// Run the agent's sign-in flow (opens the browser). Blocks until the user finishes.
+/// Kick off the agent's sign-in flow (grok opens the browser itself). Returns as soon
+/// as the request is on the wire; the outcome arrives as one `acp-auth` event.
+///
+/// Fire-and-forget rather than `spawn_blocking`, because this is an unbounded
+/// human-in-the-loop wait on a channel a thread we already own feeds — the exact
+/// shape `send_prompt` uses. Resolving the promise here would mean "sent", not
+/// "signed in", so the frontend MUST key success off `acp-auth {status:"ok"}`.
 #[tauri::command]
-fn authenticate(state: State<AcpState>, tab_id: String, method_id: String) -> Result<(), String> {
+fn authenticate(
+    app: AppHandle,
+    state: State<AcpState>,
+    tab_id: String,
+    method_id: String,
+) -> Result<(), String> {
     let (stdin, pending, next_id) = {
         let guard = state.inner.lock().map_err(|e| e.to_string())?;
         let s = guard.get(&tab_id).ok_or("not connected to grok")?;
@@ -1040,21 +1432,49 @@ fn authenticate(state: State<AcpState>, tab_id: String, method_id: String) -> Re
         "authenticate",
         json!({"methodId": method_id}),
     )?;
-    // Browser round-trip: the user has to actually sign in, so wait generously.
-    rx.recv_timeout(Duration::from_secs(5 * 60))
-        .map_err(|_| "Sign-in timed out. Try again?".to_string())??;
+
+    thread::spawn(move || {
+        // 11 minutes, deliberately LONGER than grok's own 10-minute device-code
+        // deadline. Anything shorter invents a divergent state: the user signs in at
+        // minute 6, grok writes auth.json, and we tell them it timed out. We'd rather
+        // outlive grok's deadline and report the answer it actually gives.
+        //
+        // (Note: on the timeout arm the pending entry for this id is never removed —
+        // the same tx leak `request` has everywhere. Bounded by process lifetime; see
+        // c10, deferred.)
+        let payload = match rx.recv_timeout(Duration::from_secs(11 * 60)) {
+            // Constructed, not forwarded: grok answers `{}` plus a `_meta` bag, and
+            // the wire contract is ours, not its. snake_case -> camelCase here.
+            Ok(Ok(result)) => json!({
+                "status": "ok",
+                "email": result["_meta"]["email"],
+                "subscriptionTier": result["_meta"]["subscription_tier"],
+            }),
+            Ok(Err(e)) => json!({"status": "failed", "message": e}),
+            Err(_) => json!({"status": "timed_out", "message": "Sign-in timed out. Try again?"}),
+        };
+        let _ = app.emit("acp-auth", with_tab_id(payload, &tab_id));
+    });
     Ok(())
 }
 
 /// Open a session after a successful sign-in.
 #[tauri::command]
-fn open_session(
-    app: AppHandle,
-    state: State<AcpState>,
-    tab_id: String,
-    cwd: String,
-) -> Result<String, String> {
-    new_session(&app, &state, &tab_id, &cwd)?
+async fn open_session(app: AppHandle, tab_id: String, cwd: String) -> Result<String, String> {
+    // Both Result levels stay inside the closure; flatten at the await boundary.
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        emit_connect(&app, &tab_id, "session", None, None);
+        let state = app.state::<AcpState>();
+        let outcome = new_session(&app, &state, &tab_id, &cwd);
+        match &outcome {
+            Ok(Ok(id)) => emit_connect(&app, &tab_id, "ready", Some(id), None),
+            Ok(Err(e)) | Err(e) => emit_connect(&app, &tab_id, "failed", None, Some(e)),
+        }
+        outcome
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    outcome?
 }
 
 /// Answer an open `session/request_permission`. `option_id` of None means "the user
@@ -1124,13 +1544,25 @@ fn send_prompt(
     Ok(())
 }
 
+/// Tear a tab's session down. `Session::kill` reaps the child with a blocking
+/// `wait()`, so this must never run on the main thread — it is the escape hatch
+/// from a wait, and would otherwise freeze the UI it exists to unfreeze.
 #[tauri::command]
-fn cancel(state: State<AcpState>, tab_id: String) -> Result<(), String> {
+async fn cancel(app: AppHandle, tab_id: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AcpState>();
+        cancel_blocking(&state, &tab_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn cancel_blocking(state: &State<AcpState>, tab_id: &str) -> Result<(), String> {
     let session = state
         .inner
         .lock()
         .map_err(|e| e.to_string())?
-        .remove(&tab_id);
+        .remove(tab_id);
     if let Some(s) = session {
         if let Some(id) = s.session_id.clone() {
             // Best-effort protocol cancel, then make sure the process is really gone.
@@ -1178,7 +1610,6 @@ pub fn run() {
     let builder = builder.setup(|app| {
         use tauri::menu::{Menu, MenuItem};
         use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-        use tauri::Manager;
 
         let show = MenuItem::with_id(app, "show", "Show Grok Build", true, None::<&str>)?;
         let new_chat = MenuItem::with_id(app, "newchat", "New chat", true, None::<&str>)?;
