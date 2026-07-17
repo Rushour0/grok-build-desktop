@@ -402,9 +402,46 @@ button.recent span {
    lights; it's the app's own chrome now that the OS titlebar is gone. */
 .titlebar {
   flex: none;
-  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 34px;
+  /* Clear the macOS traffic lights so the toggle doesn't sit under them. */
+  padding-left: 78px;
   background: var(--sheen), var(--panel);
   border-bottom: 1px solid var(--line);
+}
+/* The draggable part is only the empty remainder of the bar, so the toggle button stays a
+   real button. Stretches full height so there's a generous grab target. */
+.titlebar-drag {
+  flex: 1;
+  align-self: stretch;
+}
+.sidebar-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--ink-soft);
+  background: transparent;
+  box-shadow: none;
+  transition: color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-out);
+}
+.sidebar-toggle:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--bg);
+  transform: scale(1.1);
+}
+.sidebar-toggle:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.sidebar-toggle svg {
+  display: block;
 }
 /* On the splash there's no column to sit in, so it floats over the top edge instead of
    pushing the centered content down. Transparent — the splash shows through. */
@@ -439,6 +476,12 @@ button.recent span {
   /* Recessed: the content pane reads as lifted above the sidebar because the sidebar's
      inner-right edge falls into shadow. Depth from layering, not just from card shadows. */
   box-shadow: inset -10px 0 16px -14px rgba(0, 0, 0, 0.35);
+  /* Collapsing slides it left off the edge (clipped by `.shell-body`'s overflow) and lets
+     the content pane grow into the space — a real hide, not just a width shrink. */
+  transition: margin-left var(--dur-slow) var(--ease-out);
+}
+.sidebar.collapsed {
+  margin-left: -261px;
 }
 .sidebar-head {
   display: flex;
@@ -560,10 +603,16 @@ button.side-row::before {
 }
 button.side-row:hover {
   background: var(--bg);
-  transform: translateX(2px);
+  transform: translateX(3px);
+}
+/* Hovering a row half-raises its accent bar — a hint of the state it would take if clicked.
+   Not on the active row, whose bar is already fully up. */
+button.side-row:not(.active):hover::before {
+  transform: scaleY(0.5);
+  background: var(--ink-soft);
 }
 button.side-row:active {
-  transform: translateX(2px) scale(0.996);
+  transform: translateX(3px) scale(0.996);
 }
 button.side-row.active {
   background: var(--bg);
@@ -810,6 +859,19 @@ button.tab-add {
   padding: 0.4rem 0.65rem;
   color: var(--ink-soft);
   font-size: 1rem;
+}
+button.tab-add,
+button.tab-close {
+  transition: color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard), transform var(--dur) var(--ease-out);
+}
+/* The little delights: the new-tab plus turns a quarter as you reach for it, and a tab's
+   close cross swells so it's an easier, more deliberate target. */
+button.tab-add:hover {
+  transform: rotate(90deg) scale(1.08);
+}
+button.tab-close:hover {
+  transform: scale(1.2);
 }
 .tab-auth {
   gap: 0.75rem;
@@ -1428,8 +1490,17 @@ button.tab-add {
   .stream > .plan:hover,
   button.primary:hover:not(:disabled),
   button.recent:hover,
-  button.side-row:hover {
+  button.side-row:hover,
+  button.tab-add:hover,
+  button.tab-close:hover,
+  button.sidebar-toggle:hover:not(:disabled),
+  .attachment-chip button:hover {
     transform: none;
+  }
+  /* The sidebar still hides on toggle — that's function, not decoration — it just snaps
+     rather than sliding. */
+  .sidebar {
+    transition: none;
   }
 }
 
@@ -1530,10 +1601,13 @@ button.tab-add {
   border-radius: 50%;
   color: var(--ink-soft);
   line-height: 1;
+  transition: color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-out);
 }
 .attachment-chip button:hover {
   background: var(--bg);
   color: var(--ink);
+  transform: scale(1.15);
 }
 .composer textarea {
   min-width: 0;

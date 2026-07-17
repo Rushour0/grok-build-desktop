@@ -409,6 +409,15 @@ export default function App() {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  // Whether the conversation sidebar is showing. Persisted so a window that was opened with
+  // it collapsed comes back collapsed — the choice is the user's, not reset every launch.
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    try {
+      return localStorage.getItem("sidebarOpen") !== "false";
+    } catch {
+      return true;
+    }
+  });
   const [notice, setNotice] = useState<string | null>(null);
   const [recents, setRecents] = useState<Project[]>([]);
   /// An `open_project` is in flight. Decoration for the launcher's wait, nothing
@@ -541,6 +550,14 @@ export default function App() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [activeTab?.items, activeTab?.busy]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("sidebarOpen", String(sidebarOpen));
+    } catch {
+      // A private-mode window with no storage still works; it just won't remember the choice.
+    }
+  }, [sidebarOpen]);
 
   // Ask Rust what this window is: is grok installed, and does this window already
   // own a project? A window built by `open_project` comes up straight into a new
@@ -720,23 +737,29 @@ export default function App() {
     };
   }, [activeTab?.cwd, activeTab?.id, stage, updateTab]);
 
-  // Cmd/Ctrl+W closes the active tab, browser-style. When it takes the window's last tab
-  // with it — or when there's no tab to close (a launcher) — there's nothing left in the
-  // window worth keeping open, so the window closes too. That's what Cmd+W does everywhere
-  // else; leaving an empty "nothing open" shell behind would be the surprising outcome.
+  // Cmd/Ctrl+W closes the active tab. It only closes the *window* once there is no tab left
+  // to close — so the last tab's close drops you on the empty "nothing open" state, and a
+  // second Cmd+W from there closes the window. Closing the window out from under the last
+  // tab in one press was the surprising outcome; a tab close should stay a tab close.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      // Cmd/Ctrl+B toggles the sidebar — the editor-standard shortcut, so it's where the
+      // hand already reaches for it.
+      if (event.key === "b" || event.key === "B") {
+        event.preventDefault();
+        setSidebarOpen((open) => !open);
+        return;
+      }
       if (event.key !== "w" && event.key !== "W") return;
       event.preventDefault();
       const openTab = activeTabId;
-      if (openTab && tabsRef.current.length > 1) {
+      if (openTab) {
+        // Even if it's the last one: closing it leaves the window on its empty state, not gone.
         closeTab(openTab);
         return;
       }
-      // Last tab, or nothing open: close the window itself. `cancel` best-effort stops this
-      // window's grok before the close event races the teardown.
-      if (openTab) void cancelRun(openTab).catch(() => {});
+      // Nothing open (the empty state, or a launcher) — now Cmd+W closes the window.
       void getCurrentWebviewWindow().close().catch(() => {});
     };
     window.addEventListener("keydown", onKeyDown);
@@ -1436,15 +1459,39 @@ export default function App() {
 
   return (
     <div className="shell">
-      {/* The window's own drag handle. With `titleBarStyle: Overlay` the OS titlebar is gone
-          and content reaches the top edge, so this thin strip is what you grab to move the
-          window — and it's left-padded to clear the traffic lights. Deliberately empty: the
-          Plan warned that making the button-dense tab strip a drag surface is where dragging
-          breaks, so the drag region is its own bar and nothing interactive lives on it. */}
-      <div className="titlebar" data-tauri-drag-region />
+      {/* The window's own top bar. With `titleBarStyle: Overlay` the OS titlebar is gone and
+          content reaches the top edge, so this strip carries the sidebar toggle at its left
+          (past the traffic lights) and is otherwise a drag handle. The drag region is the
+          empty spacer, NOT the whole bar: the toggle is a real button and mustn't be a drag
+          surface, or its clicks get eaten by the drag handler. */}
+      <div className="titlebar">
+        <button
+          className="sidebar-toggle"
+          onClick={() => setSidebarOpen((open) => !open)}
+          title={sidebarOpen ? "Hide sidebar (⌘B)" : "Show sidebar (⌘B)"}
+          aria-label="Toggle sidebar"
+          aria-pressed={sidebarOpen}
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <line x1="9" y1="3" x2="9" y2="21" />
+          </svg>
+        </button>
+        <div className="titlebar-drag" data-tauri-drag-region />
+      </div>
       {banner}
       <div className="shell-body">
-        <aside className="sidebar">
+        <aside className={`sidebar${sidebarOpen ? "" : " collapsed"}`}>
           <div className="sidebar-head">
             <div className="sidebar-brand">
               <span className="mark" />
