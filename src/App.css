@@ -320,6 +320,28 @@ button.side-row.active strong {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Why a search result is on screen — verbatim text from the conversation, so it borrows
+   `.progress-detail`'s idiom for exactly the same reason that rule exists: unknown
+   length, clip rather than reflow the host. One line only. This is a scent, not a
+   preview; a row that grows to fit its snippet would push the next result off screen. */
+.side-row-snippet {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The matched words. `--accent` is deliberately monochrome, so emphasis is weight and
+   ink — the same currency the rest of the sidebar spends (see `.side-row.active strong`)
+   — not a highlighter. A hue here would be the only one in the app. */
+.side-row-snippet mark {
+  background: transparent;
+  color: var(--ink);
+  font-weight: 600;
+}
 .side-state {
   padding: 0.55rem 0.65rem;
   color: var(--ink-soft);

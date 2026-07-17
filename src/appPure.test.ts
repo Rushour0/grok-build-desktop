@@ -21,9 +21,12 @@ import {
   isTool,
   isUsage,
   sessionDate,
+  sessionRows,
+  splitSnippet,
   type Item,
   type Tab,
 } from "./App";
+import type { SearchHit, SessionMeta } from "./lib/bridge";
 
 /// A tab in its resting state. Each test overrides only the fields it is about.
 function tab(over: Partial<Tab> = {}): Tab {
@@ -396,5 +399,144 @@ describe("item type guards", () => {
       const hits = [isTool, isAsk, isPlan, isUsage, isText].filter((guard) => guard(item));
       expect(hits, `kind "${item.kind}"`).toHaveLength(1);
     }
+  });
+});
+
+// ---- splitSnippet ----
+//
+// Rust marks matched terms with STX/ETX (U+0002/U+0003) rather than brackets, because a
+// snippet is verbatim transcript text and transcripts are full of real brackets. These
+// tests pin that contract from the reading end: the markers must never reach the DOM,
+// and text that merely looks like a marker must never be emphasised.
+
+const OPEN = "";
+const CLOSE = "";
+
+describe("splitSnippet", () => {
+  it("marks the matched run and leaves the rest plain", () => {
+    expect(splitSnippet(`store the ${OPEN}data${CLOSE} somewhere`)).toEqual([
+      { text: "store the ", mark: false },
+      { text: "data", mark: true },
+      { text: " somewhere", mark: false },
+    ]);
+  });
+
+  it("marks every matched run, not just the first", () => {
+    expect(splitSnippet(`${OPEN}data${CLOSE} and more ${OPEN}data${CLOSE}`)).toEqual([
+      { text: "data", mark: true },
+      { text: " and more ", mark: false },
+      { text: "data", mark: true },
+    ]);
+  });
+
+  it("never emits a marker into the output", () => {
+    // The one thing that must not happen: a control character reaching the DOM.
+    for (const part of splitSnippet(`a ${OPEN}b${CLOSE} c ${OPEN}d${CLOSE}`)) {
+      expect(part.text).not.toContain(OPEN);
+      expect(part.text).not.toContain(CLOSE);
+    }
+  });
+
+  it("leaves brackets in the transcript alone", () => {
+    // The whole reason the delimiters aren't `[`/`]`. This is prose, not a match.
+    expect(splitSnippet("see [the docs](url) about it")).toEqual([
+      { text: "see [the docs](url) about it", mark: false },
+    ]);
+  });
+
+  it("handles a snippet with no match markers at all", () => {
+    expect(splitSnippet("plain text")).toEqual([{ text: "plain text", mark: false }]);
+    expect(splitSnippet("")).toEqual([]);
+  });
+
+  it("marks a run that opens the snippet or closes it", () => {
+    expect(splitSnippet(`${OPEN}data${CLOSE} trails`)).toEqual([
+      { text: "data", mark: true },
+      { text: " trails", mark: false },
+    ]);
+    expect(splitSnippet(`leads ${OPEN}data${CLOSE}`)).toEqual([
+      { text: "leads ", mark: false },
+      { text: "data", mark: true },
+    ]);
+  });
+
+  it("survives unbalanced markers rather than throwing", () => {
+    // A snippet is quoted prose from a file we don't control. The renderer must never be
+    // the thing that breaks the sidebar, so a malformed run degrades to readable text.
+    expect(() => splitSnippet(`open ${OPEN}but never closed`)).not.toThrow();
+    expect(splitSnippet(`open ${OPEN}but never closed`)).toEqual([
+      { text: "open ", mark: false },
+      { text: "but never closed", mark: true },
+    ]);
+    // A stray close with nothing open: keep the words, drop the marker.
+    const stray = splitSnippet(`stray ${CLOSE} close`);
+    expect(stray.map((part) => part.text).join("")).toBe("stray  close");
+    expect(stray.every((part) => !part.mark)).toBe(true);
+  });
+});
+
+// ---- sessionRows ----
+
+function meta(id: string, title: string): SessionMeta {
+  return {
+    id,
+    title,
+    summary: "",
+    cwd: "/repo",
+    created_at: "",
+    updated_at: "",
+    num_messages: 0,
+  };
+}
+
+function hit(id: string, over: Partial<SearchHit> = {}): SearchHit {
+  return { id, snippet: null, from_title: true, ...over };
+}
+
+describe("sessionRows", () => {
+  const sessions = [meta("a", "Alpha"), meta("b", "Beta"), meta("c", "Gamma")];
+
+  it("shows every conversation when there is no query", () => {
+    expect(sessionRows(sessions, null, "").map((row) => row.session.id)).toEqual(["a", "b", "c"]);
+    expect(sessionRows(sessions, null, "   ").map((row) => row.session.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("renders hits in the order Rust ranked them, not the list's order", () => {
+    // Rust owns relevance (title hits first, then bm25). Re-sorting here would be a
+    // second opinion that could quietly disagree with the half that did the searching.
+    const rows = sessionRows(sessions, [hit("c"), hit("a")], "x");
+    expect(rows.map((row) => row.session.id)).toEqual(["c", "a"]);
+  });
+
+  it("carries each hit's snippet onto its row", () => {
+    const rows = sessionRows(sessions, [hit("a"), hit("b", { snippet: "the [x]", from_title: false })], "x");
+    expect(rows[0].snippet).toBeNull();
+    expect(rows[1].snippet).toBe("the [x]");
+  });
+
+  it("drops a hit for a conversation this window doesn't know", () => {
+    // The content index can name a session whose summary.json we couldn't read. There is
+    // no title or date to draw a row with, so it can't be rendered.
+    expect(sessionRows(sessions, [hit("ghost"), hit("b")], "x").map((row) => row.session.id)).toEqual(["b"]);
+  });
+
+  it("an empty hit list is a real 'nothing matched', not a fallback", () => {
+    // `[]` from Rust means the search ran and found nothing. Falling back to the local
+    // title filter here would resurrect rows the backend deliberately excluded.
+    expect(sessionRows(sessions, [], "alpha")).toEqual([]);
+  });
+
+  it("falls back to a local title filter only when the search itself failed", () => {
+    // `null` = no usable answer from the backend. The sidebar must still work; the caller
+    // shows the error alongside, because a short list passed off as the whole answer is
+    // the deceptive case.
+    const rows = sessionRows(sessions, null, "alpha");
+    expect(rows.map((row) => row.session.id)).toEqual(["a"]);
+    expect(rows[0].snippet).toBeNull();
+  });
+
+  it("the local fallback filter is case-insensitive", () => {
+    expect(sessionRows(sessions, null, "ALPHA").map((row) => row.session.id)).toEqual(["a"]);
+    expect(sessionRows(sessions, null, "lph").map((row) => row.session.id)).toEqual(["a"]);
   });
 });

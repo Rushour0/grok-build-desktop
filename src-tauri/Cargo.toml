@@ -1,6 +1,6 @@
 [package]
 name = "grok-build-desktop"
-version = "0.8.7"
+version = "0.8.8"
 description = "A clean desktop GUI for Grok Build — no terminal required."
 authors = ["Grok Build Desktop contributors"]
 license = "Apache-2.0"
@@ -27,6 +27,13 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Reads grok's OWN FTS5 index (`~/.grok/sessions/session_search.sqlite`) for content
+# search. `bundled` compiles SQLite from source rather than linking the system one:
+# macOS ships FTS5, Windows has no system SQLite at all, and `targets: "all"` means we
+# build for both. No extra feature is needed for FTS5 — libsqlite3-sys's bundled build
+# defines SQLITE_ENABLE_FTS5 itself (verified: bare `bundled` answers
+# `CREATE VIRTUAL TABLE ... USING fts5` and serves bm25()/snippet()).
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # The updater is desktop-only; mobile targets don't build it.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
