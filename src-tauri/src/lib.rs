@@ -2960,6 +2960,103 @@ async fn shutdown_all(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Blocking helper for `rewind_points`: list checkpoints for a tab's live session.
+/// Follows the `new_session`/`load_existing_session` shape — outer `Result` is our own
+/// lookup/transport failure, inner `Result` is the agent's own error reply.
+fn rewind_points_blocking(
+    state: &State<AcpState>,
+    key: &SessionKey,
+) -> Result<Result<Value, String>, String> {
+    let (stdin, pending, next_id, session_id) = {
+        let guard = state.inner.lock().map_err(|e| e.to_string())?;
+        let s = guard
+            .get(key)
+            .ok_or("No folder open yet — pick a project folder first.")?;
+        let id = s
+            .session_id
+            .clone()
+            .ok_or("No session yet — sign in and pick a folder first.")?;
+        (s.stdin.clone(), s.pending.clone(), s.next_id.clone(), id)
+    };
+    let rx = request(
+        &stdin,
+        &pending,
+        &next_id,
+        "x.ai/rewind/points",
+        json!({"sessionId": session_id}),
+    )?;
+    Ok(rx
+        .recv_timeout(Duration::from_secs(30))
+        .map_err(|_| "grok didn't answer `x.ai/rewind/points` in time".to_string())?)
+}
+
+/// List rewind checkpoints (~one per prompt) for the tab's live session. Returns the
+/// agent's raw reply shape as-is — the wire contract is unverified, so normalization
+/// happens client-side.
+#[tauri::command]
+async fn rewind_points(app: AppHandle, window: WebviewWindow, tab_id: String) -> Result<Value, String> {
+    let key = SessionKey::for_window(&window, tab_id);
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AcpState>();
+        rewind_points_blocking(&state, &key)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    outcome?
+}
+
+/// Blocking helper for `rewind_execute`: restore a chosen checkpoint. `mode` is one of
+/// "conversation" | "files" | "both", passed through verbatim — validated in-app, not here.
+fn rewind_execute_blocking(
+    state: &State<AcpState>,
+    key: &SessionKey,
+    point_id: &str,
+    mode: &str,
+) -> Result<Result<Value, String>, String> {
+    let (stdin, pending, next_id, session_id) = {
+        let guard = state.inner.lock().map_err(|e| e.to_string())?;
+        let s = guard
+            .get(key)
+            .ok_or("No folder open yet — pick a project folder first.")?;
+        let id = s
+            .session_id
+            .clone()
+            .ok_or("No session yet — sign in and pick a folder first.")?;
+        (s.stdin.clone(), s.pending.clone(), s.next_id.clone(), id)
+    };
+    let rx = request(
+        &stdin,
+        &pending,
+        &next_id,
+        "x.ai/rewind/execute",
+        json!({"sessionId": session_id, "pointId": point_id, "mode": mode}),
+    )?;
+    Ok(rx
+        .recv_timeout(Duration::from_secs(60))
+        .map_err(|_| "grok didn't answer `x.ai/rewind/execute` in time".to_string())?)
+}
+
+/// Restore a chosen rewind checkpoint. Destructive when `mode` is "files" or "both" —
+/// that gating lives entirely in the frontend's two-step confirm; this command just
+/// forwards the already-confirmed request.
+#[tauri::command]
+async fn rewind_execute(
+    app: AppHandle,
+    window: WebviewWindow,
+    tab_id: String,
+    point_id: String,
+    mode: String,
+) -> Result<Value, String> {
+    let key = SessionKey::for_window(&window, tab_id);
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AcpState>();
+        rewind_execute_blocking(&state, &key, &point_id, &mode)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    outcome?
+}
+
 /// Expose the app's hardcoded read-only auto-approval allowlist to the UI, for display only.
 ///
 /// Transparency, not authority: this just clones `READONLY_TOOLS` so Preferences can show the
@@ -3059,7 +3156,9 @@ pub fn run() {
             cancel,
             busy_sessions,
             shutdown_all,
-            readonly_tools
+            readonly_tools,
+            rewind_points,
+            rewind_execute
         ]);
 
     // Registered separately from the teardown handler above — Builder handlers stack

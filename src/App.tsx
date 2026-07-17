@@ -30,11 +30,14 @@ import {
   listProjectFiles,
   grokVersion,
   readonlyTools,
+  rewindPoints,
+  rewindExecute,
   type AuthMethod,
   type AuthStatus,
   type AvailableCommand,
   type PermissionRequest,
   type Project,
+  type RewindPoint,
   type SearchHit,
   type SessionMeta,
   type SessionModelInfo,
@@ -47,6 +50,8 @@ import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { Autocomplete, type AcItem } from "./Autocomplete";
 import { Preferences } from "./Preferences";
 import { MessageActions } from "./MessageActions";
+import { RewindPanel } from "./RewindPanel";
+import { normalizeRewindPoints, type RewindMode } from "./lib/rewind";
 import { filterSlash, filterFiles, detectTrigger, applyPick } from "./lib/commands";
 import { isThemePref, applyTheme, type ThemePref } from "./lib/theme";
 import "./App.css";
@@ -511,6 +516,15 @@ export default function App() {
   // time the trigger itself changes (new "/" or "@", or the query changes),
   // so dismissing "/f" doesn't also suppress "/fo" a keystroke later.
   const [acDismissed, setAcDismissed] = useState(false);
+  // Rewind panel state. `rewindOpen` gates rendering `<RewindPanel/>` at all;
+  // the rest mirror the panel's own props 1:1 so App stays the single owner
+  // of "what points do we have" / "are we still fetching them" / "did the
+  // fetch fail" — the panel itself never calls the bridge.
+  const [rewindOpen, setRewindOpen] = useState(false);
+  const [rewindPointsList, setRewindPointsList] = useState<RewindPoint[]>([]);
+  const [rewindLoading, setRewindLoading] = useState(false);
+  const [rewindError, setRewindError] = useState<string | null>(null);
+  const [rewindFocusId, setRewindFocusId] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1521,30 +1535,7 @@ export default function App() {
         if (connected.needs_auth) return;
       }
 
-      sessionReplays.current.set(tab.id, []);
-      updateTab(tab.id, (current) => ({
-        ...current,
-        items: [],
-        busy: false,
-        attachments: [],
-        usageTokens: 0,
-        error: null,
-      }));
-      openBubbles.current.set(tab.id, {});
-      planIds.current.delete(tab.id);
-
-      const sessionId = await loadSession(tab.id, session.cwd, session.id);
-      const updates = sessionReplays.current.get(tab.id) ?? [];
-      sessionReplays.current.delete(tab.id);
-      if (!tabsRef.current.some((candidate) => candidate.id === tab.id)) return;
-      updateTab(tab.id, (current) => ({
-        ...current,
-        sessionId,
-        items: reduceUpdates(updates),
-        busy: false,
-        error: null,
-      }));
-      setHistoryRevision((revision) => revision + 1);
+      await reloadTranscript(tab, session.cwd, session.id);
     } catch (error) {
       sessionReplays.current.delete(tab.id);
       updateTab(tab.id, (current) => ({ ...current, busy: false, error: String(error) }));
@@ -1554,6 +1545,90 @@ export default function App() {
       // early returns. A stuck `loadingSessionId` would make the sidebar think
       // this conversation is open forever and refuse to ever reopen it.
       updateTab(tab.id, (current) => ({ ...current, loadingSessionId: null }));
+    }
+  }
+
+  /// The replay-reload core of `openConversation`, factored out so a rewind
+  /// restore can rebuild a tab's transcript from scratch the exact same way
+  /// a freshly opened conversation does, instead of hand-patching `tab.items`
+  /// against a server-side state that just changed under it. Re-arms the
+  /// replay buffer, clears the per-tab bubble/plan tracking so stale ids from
+  /// the old transcript can't leak into the new one, then defers to
+  /// `loadSession`/`reduceUpdates` — the single source of truth for turning
+  /// ACP updates into `Item[]`.
+  async function reloadTranscript(tab: Tab, cwd: string, sessionId: string) {
+    sessionReplays.current.set(tab.id, []);
+    updateTab(tab.id, (current) => ({
+      ...current,
+      items: [],
+      busy: false,
+      attachments: [],
+      usageTokens: 0,
+      error: null,
+    }));
+    openBubbles.current.set(tab.id, {});
+    planIds.current.delete(tab.id);
+
+    const loadedSessionId = await loadSession(tab.id, cwd, sessionId);
+    const updates = sessionReplays.current.get(tab.id) ?? [];
+    sessionReplays.current.delete(tab.id);
+    if (!tabsRef.current.some((candidate) => candidate.id === tab.id)) return;
+    updateTab(tab.id, (current) => ({
+      ...current,
+      sessionId: loadedSessionId,
+      items: reduceUpdates(updates),
+      busy: false,
+      error: null,
+    }));
+    setHistoryRevision((revision) => revision + 1);
+  }
+
+  /// Opens the Rewind panel for a "you" bubble and fetches this tab's
+  /// checkpoint list. Errors are shown honestly inside the panel rather than
+  /// silently leaving it stuck on "Loading…" — the wire shape of
+  /// `x.ai/rewind/points` is unverified, so a malformed response degrades to
+  /// an empty list via `normalizeRewindPoints` rather than throwing here.
+  async function openRewind(tab: Tab, item: TextItem) {
+    setRewindOpen(true);
+    setRewindLoading(true);
+    setRewindError(null);
+    setRewindPointsList([]);
+    // Best-effort: a point whose id happens to equal this message's id can be
+    // pre-highlighted. If grok's point ids don't line up with our item ids,
+    // this just stays null and the panel opens with nothing pre-selected —
+    // never a crash, never a wrong highlight.
+    setRewindFocusId(item.id);
+    try {
+      const raw = await rewindPoints(tab.id);
+      const points = normalizeRewindPoints(raw);
+      setRewindPointsList(points);
+      if (!points.some((point) => point.id === item.id)) {
+        setRewindFocusId(null);
+      }
+    } catch (error) {
+      setRewindError(String(error));
+    } finally {
+      setRewindLoading(false);
+    }
+  }
+
+  /// Runs a confirmed restore (the panel has already gated destructive scopes
+  /// behind its own two-step confirm before calling this). On success the
+  /// server-side session state has changed, so the transcript is rebuilt via
+  /// `reloadTranscript` — the same replay path a freshly opened conversation
+  /// uses — rather than hand-patching `tab.items` against a state we didn't
+  /// observe directly.
+  async function confirmRewind(pointId: string, mode: RewindMode) {
+    const tab = activeTab;
+    if (!tab) return;
+    try {
+      await rewindExecute(tab.id, pointId, mode);
+      if (tab.sessionId) {
+        await reloadTranscript(tab, tab.cwd, tab.sessionId);
+      }
+      setRewindOpen(false);
+    } catch (error) {
+      setRewindError(String(error));
     }
   }
 
@@ -2061,6 +2136,9 @@ export default function App() {
                         updateActiveTab((tab) => ({ ...tab, draft: text }));
                         requestAnimationFrame(() => textareaRef.current?.focus());
                       }}
+                      onRewindMessage={(item) => {
+                        if (activeTab) void openRewind(activeTab, item);
+                      }}
                     />
                     {activeTab.busy && (
                       <div className="working">
@@ -2208,6 +2286,15 @@ export default function App() {
         onCheckUpdates={() => void askUpdate()}
         readonlyTools={readonlyToolsList}
       />
+      <RewindPanel
+        open={rewindOpen}
+        onClose={() => setRewindOpen(false)}
+        points={rewindPointsList}
+        loading={rewindLoading}
+        error={rewindError}
+        focusPointId={rewindFocusId}
+        onConfirm={(pointId, mode) => void confirmRewind(pointId, mode)}
+      />
     </div>
   );
 }
@@ -2342,6 +2429,7 @@ function TranscriptItems({
   streamingId,
   onDecide,
   onEditMessage,
+  onRewindMessage,
 }: {
   items: Item[];
   /// The id of the answer bubble currently streaming, or null. Only decides whether this
@@ -2351,6 +2439,10 @@ function TranscriptItems({
   /// Loads a past "you" message's text back into the composer draft for editing and
   /// resending as a new turn. Never mutates or truncates history.
   onEditMessage?: (text: string) => void;
+  /// Opens the Rewind panel anchored at this "you" message. Never mutates or
+  /// truncates history itself — the panel/App own fetching points and
+  /// executing the restore.
+  onRewindMessage?: (item: TextItem) => void;
 }) {
   return items.map((item) => {
     if (isTool(item)) {
@@ -2373,6 +2465,7 @@ function TranscriptItems({
           <MessageActions
             text={item.text}
             onEdit={item.kind === "you" ? () => onEditMessage?.(item.text) : undefined}
+            onRewind={item.kind === "you" ? () => onRewindMessage?.(item) : undefined}
           />
         </div>
       );

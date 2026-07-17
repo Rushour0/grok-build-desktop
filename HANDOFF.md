@@ -5,7 +5,7 @@ Agent Client Protocol (ACP) over the child's stdio, and forwards the live sessio
 webview. Independent and unofficial: it drives the upstream CLI at runtime and does not
 redistribute it. See `NOTICE`.
 
-Current version: **0.9.4**.
+Current version: **0.9.5**.
 
 ```text
 webview (React)  --invoke-->  Rust host  --stdin-->   grok agent stdio
@@ -218,9 +218,23 @@ deleted transcript mode (`.content-header`, `.content-actions`, `.history-state`
    via the clipboard, and an Edit action on user ("you") messages that loads that message's text
    back into the composer draft and focuses it so it can be tweaked and sent as a **new** turn.
    This is purely additive to the composer draft: it does not delete, rewrite, or truncate any
-   transcript history. Destructive checkpoint/rewind (editing a past turn in place and re-running
-   from that point) is intentionally **deferred** pending a design decision on how conversation
-   truncation should work with ACP session state — do not conflate the two features.
+   transcript history.
+0e. **Shipped in v0.9.5 ("checkpoint/rewind"):** a "Rewind to here" action on user ("you")
+   message bubbles opens a Rewind panel listing checkpoints from Grok's `x.ai/rewind/points`
+   ACP extension method (roughly one per prompt), with a scope selector (conversation only /
+   files only / both) and restore via `x.ai/rewind/execute`. **The wire shape of both methods
+   is unverified headlessly**, so the Rust commands return raw `serde_json::Value` and the TS
+   side (`src/lib/rewind.ts`) normalizes defensively — it accepts a bare array or a
+   `{points: [...]}` envelope and tolerates missing/extra fields on each point. Any restore
+   whose scope includes files overwrites on-disk work and cannot be undone, so that path is
+   **double-confirmed**: a first screen states exactly what will be lost, and only a second,
+   visually distinct, non-default-focused "Yes, rewind" button actually calls
+   `x.ai/rewind/execute`. Conversation-only restores are non-destructive and confirm in one
+   step. `window.confirm`/`window.alert`/the dialog plugin do not work in this app (wry's
+   macOS `WKUIDelegate` doesn't implement `runJavaScriptConfirmPanel`), so the two-step gate is
+   in-app React UI only, following the same pattern as the `UpdateBanner` two-step update gate.
+   After a successful execute, the transcript is rebuilt via the existing reload/replay flow
+   (re-arm `sessionReplays`, `loadSession`, `reduceUpdates`) rather than hand-patched in place.
 1. The one refactor above (kills four bugs).
 2. ~~Surface grok's own capabilities — it advertises `available_commands`~~ — the slash-command
    piece is done (see 0a). Remaining: exposing `/compact`, `/context`, `/session-info`, and

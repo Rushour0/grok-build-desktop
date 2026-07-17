@@ -36,6 +36,8 @@ import {
   recentProjects,
   respondHook,
   respondPermission,
+  rewindExecute,
+  rewindPoints,
   searchSessions,
   type SessionModelInfo,
   type SessionUpdate,
@@ -216,6 +218,39 @@ describe("commands: name and argument contract", () => {
     await readonlyTools();
     expect(invoke).toHaveBeenCalledWith("readonly_tools");
   });
+
+  it("rewind_points passes tabId", async () => {
+    await rewindPoints("tab-1");
+    expect(invoke).toHaveBeenCalledWith("rewind_points", { tabId: "tab-1" });
+  });
+
+  it("rewind_execute passes tabId, pointId and mode", async () => {
+    await rewindExecute("tab-1", "point-9", "conversation");
+    expect(invoke).toHaveBeenCalledWith("rewind_execute", {
+      tabId: "tab-1",
+      pointId: "point-9",
+      mode: "conversation",
+    });
+  });
+
+  it("rewind_execute passes the files and both destructive modes through untouched", async () => {
+    // "files"/"both" are the destructive scopes — a bridge that coerced or
+    // dropped this argument would silently downgrade a destructive restore to
+    // the safe conversation-only one, or vice versa.
+    await rewindExecute("tab-1", "point-9", "files");
+    expect(invoke).toHaveBeenCalledWith("rewind_execute", {
+      tabId: "tab-1",
+      pointId: "point-9",
+      mode: "files",
+    });
+
+    await rewindExecute("tab-1", "point-9", "both");
+    expect(invoke).toHaveBeenCalledWith("rewind_execute", {
+      tabId: "tab-1",
+      pointId: "point-9",
+      mode: "both",
+    });
+  });
 });
 
 describe("commands: results and failures pass through untouched", () => {
@@ -263,6 +298,25 @@ describe("commands: results and failures pass through untouched", () => {
     const tools = ["read_file", "list_dir", "grep"];
     invoke.mockResolvedValue(tools);
     await expect(readonlyTools()).resolves.toEqual(tools);
+  });
+
+  it("resolves rewind_points with whatever shape Rust returned, untouched", async () => {
+    // The wire shape is unverified headlessly (raw serde_json::Value on the
+    // Rust side) — the bridge must not guess at [points] vs {points:[...]}.
+    // Normalizing is rewind.ts's job, not the bridge's.
+    const raw = { points: [{ id: "p1", promptText: "fix the build" }] };
+    invoke.mockResolvedValue(raw);
+    await expect(rewindPoints("tab-1")).resolves.toEqual(raw);
+  });
+
+  it("rejects rewind_points when Rust rejects", async () => {
+    invoke.mockRejectedValue(new Error("No session yet — sign in and pick a folder first."));
+    await expect(rewindPoints("tab-1")).rejects.toThrow("No session yet");
+  });
+
+  it("rejects rewind_execute when Rust rejects", async () => {
+    invoke.mockRejectedValue(new Error("No folder open yet — pick a project folder first."));
+    await expect(rewindExecute("tab-1", "point-9", "both")).rejects.toThrow("No folder open yet");
   });
 });
 

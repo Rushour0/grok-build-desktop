@@ -152,12 +152,11 @@ Grok, or its own metadata, any new trust.
 - [x] An upstream watcher-bot that opens a PR when Grok/ACP tool schema, models, or versions
   drift, plus a read-only Tools & Safety panel in Preferences — v0.9.3
 - [x] Message actions — copy any message, and edit-and-resend a prompt as a new turn — v0.9.4
+- [x] Checkpoint/rewind — restore an earlier point in a conversation (conversation, files, or
+  both), from a "Rewind to here" action on your own messages, with a two-step confirmation
+  before any file restore — v0.9.5
 
 Not yet, on the list:
-
-- [ ] Destructive checkpoint/rewind (edit a past turn in place and truncate/re-run from that
-  point) — intentionally deferred from v0.9.4 pending a design decision on how conversation
-  truncation should interact with ACP session state
 
 - [ ] Cost display — token counts are shown, but not converted to currency
 - [ ] Code-signed Windows builds (no SmartScreen warning)

@@ -2669,3 +2669,250 @@ textarea:focus-visible {
     transition: none;
   }
 }
+
+/* ---- rewind overlay ("Rewind to here" on a "you" bubble) ----
+   Same floating-layer family as .prefs — .rewind-backdrop/.rewind mirror
+   .prefs-backdrop/.prefs exactly (scrim tuning, panel sizing, animation) so this reads as
+   one modal system, not a third bespoke one. Monochrome: no new hue enters here except
+   --danger, and --danger is scoped to exactly one button — the second-step destructive
+   confirm — never a background fill, never the default row state. */
+
+.rewind-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+  background: rgba(0, 0, 0, 0.28);
+  animation: fade-up var(--dur-fast) var(--ease-standard) both;
+}
+@media (prefers-color-scheme: dark) {
+  .rewind-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+:root[data-theme="dark"] .rewind-backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="light"] .rewind-backdrop {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.rewind {
+  width: min(560px, calc(100vw - 2.5rem));
+  max-height: min(78vh, 640px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow-3);
+  animation: scale-in var(--dur) var(--ease-out) both;
+}
+
+.rewind-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: none;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.rewind-body {
+  overflow-y: auto;
+  padding: 0.6rem 1.1rem 1.1rem;
+}
+
+.rewind-section {
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.rewind-section:last-child {
+  border-bottom: none;
+}
+
+.rewind-section-title {
+  margin: 0 0 0.55rem;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.rewind-hint {
+  margin: 0.3rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+}
+
+/* Checkpoint list: one row per prompt, same list-row idiom as .prefs-row but selectable
+   (a full-row button rather than a static line) since choosing a point is the point. */
+.rewind-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.5rem 0 0;
+}
+
+.rewind-point {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.rewind-point:hover,
+.rewind-point:focus-visible {
+  border-color: color-mix(in srgb, var(--ink) 25%, var(--line));
+}
+.rewind-point:focus-visible {
+  outline: 2px solid var(--ink-soft);
+  outline-offset: 1px;
+}
+.rewind-point.active {
+  border-color: var(--ink-soft);
+  background: color-mix(in srgb, var(--ink) 6%, var(--bg));
+}
+
+.rewind-point-prompt {
+  font-size: 0.84rem;
+  line-height: 1.35;
+  /* Long prompt text clips to two lines so the list stays scannable. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rewind-point-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+}
+
+.rewind-empty,
+.rewind-error,
+.rewind-loading {
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+.rewind-error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+}
+
+/* Scope selector reuses the segmented control from Preferences verbatim. */
+.rewind-scope {
+  margin: 0.5rem 0 0;
+}
+
+.rewind-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+/* Primary / cancel buttons: the same monochrome ghost-button family as .msg-action, just
+   sized for a modal footer rather than an inline hover row. */
+.rewind-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.rewind-btn:hover,
+.rewind-btn:focus-visible {
+  border-color: color-mix(in srgb, var(--ink) 25%, var(--line));
+}
+.rewind-btn:focus-visible {
+  outline: 2px solid var(--ink-soft);
+  outline-offset: 1px;
+}
+.rewind-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Two-step destructive confirm ("files"/"both" scope). Step 1 is a plain-text warning
+   panel (no new colour — the copy itself carries the weight); step 2's "Yes, rewind"
+   button is the ONE place in this overlay --danger fills a button, and it is
+   deliberately never :autofocus so a stray Enter can never trigger it. */
+.rewind-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg));
+}
+
+.rewind-confirm-copy {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.rewind-btn.danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+.rewind-btn.danger:hover,
+.rewind-btn.danger:focus-visible {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 88%, black);
+}
+.rewind-btn.danger:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rewind-backdrop,
+  .rewind,
+  .rewind-point,
+  .rewind-btn {
+    animation: none;
+    transition: none;
+  }
+}

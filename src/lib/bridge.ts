@@ -141,6 +141,29 @@ export const grokVersion = () => invoke<string>("grok_version");
 /// not a source of truth the frontend can widen; Rust's allowlist stays sole authority.
 export const readonlyTools = () => invoke<string[]>("readonly_tools");
 
+/// One checkpoint grok's `x.ai/rewind/points` can restore to, ~one per prompt.
+/// The wire shape is unverified headlessly, so every field is optional and
+/// unknown extras pass through — see `normalizeRewindPoints` in rewind.ts for
+/// the client-side normalization this defensiveness expects callers to do.
+export interface RewindPoint {
+  id?: string;
+  promptText?: string;
+  createdAt?: string | number;
+  fileChangeCount?: number;
+  [k: string]: unknown;
+}
+
+/// List the checkpoints available to rewind to for this tab's session.
+export const rewindPoints = (tabId: string) =>
+  invoke<{ points?: RewindPoint[] } | RewindPoint[]>("rewind_points", { tabId });
+
+/// Restore a checkpoint. `mode` selects the blast radius: "conversation" only
+/// replays the transcript, "files"/"both" also overwrite on-disk work and are
+/// destructive — callers must gate those through a two-step in-app confirm
+/// (see RewindPanel), never fire this straight off a single click.
+export const rewindExecute = (tabId: string, pointId: string, mode: "conversation" | "files" | "both") =>
+  invoke<unknown>("rewind_execute", { tabId, pointId, mode });
+
 // ---- ACP session/update payloads (Rust -> webview) ----
 // Shapes verified against grok 0.2.101's `initialize` response.
 
