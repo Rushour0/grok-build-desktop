@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import Markdown from "markdown-to-jsx";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
@@ -39,20 +41,20 @@ import "./App.css";
 // `ready` means "this window has no project yet" — the launcher. `chat` means it
 // has one. The two are kept in lockstep with `projectCwd`, which is what the
 // render actually branches on, so a stage that drifts can't make the UI lie.
-type Stage = "checking" | "needs-install" | "installing" | "ready" | "chat";
+export type Stage = "checking" | "needs-install" | "installing" | "ready" | "chat";
 
-interface ToolItem {
+export interface ToolItem {
   id: string;
   kind: "tool";
   title: string;
   status: string;
 }
-interface TextItem {
+export interface TextItem {
   id: string;
   kind: "answer" | "thought" | "you" | "error";
   text: string;
 }
-interface AskItem {
+export interface AskItem {
   id: string;
   kind: "ask";
   req: PermissionRequest;
@@ -63,12 +65,12 @@ interface AskItem {
   /// thing and must not render the same way.
   failed: string | null;
 }
-interface PlanItem {
+export interface PlanItem {
   id: string;
   kind: "plan";
   entries: { content: string; status?: string; priority?: string }[];
 }
-interface UsageItem {
+export interface UsageItem {
   id: string;
   kind: "usage";
   modelId?: string;
@@ -79,15 +81,15 @@ interface UsageItem {
   cachedReadTokens?: number;
   apiDurationMs?: number;
 }
-type Item = ToolItem | TextItem | AskItem | PlanItem | UsageItem;
+export type Item = ToolItem | TextItem | AskItem | PlanItem | UsageItem;
 
 /// Where a sign-in is up to. Rust only ever tells us the *outcome* (`acp-auth` is
 /// `ok | failed | timed_out`), so every in-flight state below is ours alone:
 /// `contacting` and `browser` are split by our own 1.5s timer, and `opening` is
 /// the post-auth `openSession` wait — a stage no backend knows about.
-type AuthPending = "contacting" | "browser" | "opening" | null;
+export type AuthPending = "contacting" | "browser" | "opening" | null;
 
-interface Tab {
+export interface Tab {
   id: string;
   /// Always the owning window's project. A tab can no longer lack one: you reach
   /// a tab strip only through a window that already has a folder.
@@ -151,7 +153,7 @@ function createTab(cwd: string): Tab {
 /// `acp-connect` stages are verbatim, non-exhaustive labels. Anything not in this
 /// table simply doesn't render: an unknown stage is a missing sentence, not a bug.
 /// `failed` is absent on purpose — the rejected promise owns every error message.
-const CONNECT_COPY: Record<string, string> = {
+export const CONNECT_COPY: Record<string, string> = {
   spawning: "Starting Grok Build…",
   handshaking: "Connecting to Grok Build…",
   needs_auth: "Checking your sign-in…",
@@ -161,7 +163,7 @@ const CONNECT_COPY: Record<string, string> = {
 
 /// The installer's stages, mapped from its own stderr. No byte counts and no
 /// percentage: nothing here reports a total, so any number would be invented.
-const INSTALL_COPY: Record<string, string> = {
+export const INSTALL_COPY: Record<string, string> = {
   resolving: "Finding the latest version…",
   downloading: "Downloading Grok Build…",
   configuring: "Setting up your PATH…",
@@ -172,17 +174,17 @@ function itemId(prefix: string): string {
   return `${prefix}-${nextItemId++}`;
 }
 
-const isTool = (i: Item): i is ToolItem => i.kind === "tool";
-const isAsk = (i: Item): i is AskItem => i.kind === "ask";
-const isPlan = (i: Item): i is PlanItem => i.kind === "plan";
-const isUsage = (i: Item): i is UsageItem => i.kind === "usage";
-const isText = (i: Item): i is TextItem => !isTool(i) && !isAsk(i) && !isPlan(i) && !isUsage(i);
+export const isTool = (i: Item): i is ToolItem => i.kind === "tool";
+export const isAsk = (i: Item): i is AskItem => i.kind === "ask";
+export const isPlan = (i: Item): i is PlanItem => i.kind === "plan";
+export const isUsage = (i: Item): i is UsageItem => i.kind === "usage";
+export const isText = (i: Item): i is TextItem => !isTool(i) && !isAsk(i) && !isPlan(i) && !isUsage(i);
 
-function isFiniteNumber(value: number | undefined): value is number {
+export function isFiniteNumber(value: number | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function folderName(path: string): string {
+export function folderName(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
 }
@@ -194,11 +196,11 @@ export function toMention(cwd: string | null, absPath: string): string {
   return path.includes(" ") ? `@"${path}"` : `@${path}`;
 }
 
-function isImagePath(path: string): boolean {
+export function isImagePath(path: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(path);
 }
 
-function reduceUpdates(updates: SessionUpdate[]): Item[] {
+export function reduceUpdates(updates: SessionUpdate[]): Item[] {
   type Reduction = {
     items: Item[];
     answerId?: string;
@@ -286,14 +288,14 @@ function reduceUpdates(updates: SessionUpdate[]): Item[] {
 /// The connect line, or null while there's nothing worth saying: before the 400ms
 /// gate, or once the promise has settled. Falls back to a generic line because
 /// `acp-connect` is decoration and may never arrive.
-function connectLineFor(tab: Tab): string | null {
+export function connectLineFor(tab: Tab): string | null {
   if (!tab.connecting || !tab.connectShowLine) return null;
   return tab.connectLine ?? "Connecting to your project…";
 }
 
 /// What the sign-in screen is waiting on. `contacting` says nothing on purpose —
 /// under 1.5s there's nothing to report and a flash would be noise.
-function authLine(tab: Tab): string | null {
+export function authLine(tab: Tab): string | null {
   if (tab.authPending === "browser") return "A browser window will open — finish signing in there.";
   // `finishSignIn` arms `beginConnect` in the same breath as `opening`, so this
   // fallback covers the 400ms before the gate opens. It has to be the line the
@@ -306,7 +308,7 @@ function authLine(tab: Tab): string | null {
 /// `--resume` path, which knows the id and the folder but may not have the title.
 type ConversationRef = Pick<SessionMeta, "id" | "cwd" | "title">;
 
-function sessionDate(value: string): string {
+export function sessionDate(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
 }
@@ -1634,6 +1636,85 @@ export default function App() {
   );
 }
 
+/// A link in agent-written markdown. Two things have to be true here.
+///
+/// It must not navigate the webview: this window has no back button and no chrome,
+/// so a click that replaced the app with someone's web page would strand the user
+/// in it with no way back. `preventDefault` plus the opener plugin sends it to the
+/// real browser instead, which is the only place a web page belongs.
+///
+/// And only ever an http(s) URL. markdown-to-jsx's built-in sanitizer already drops
+/// `javascript:` and `data:` hrefs (they arrive here as `undefined`), so this
+/// allowlist is the second lock, not the first — `openUrl` hands its argument to
+/// the OS, and the OS will happily act on schemes a browser never would.
+function MarkdownLink({ href, children }: { href?: string; children?: React.ReactNode }) {
+  const url = typeof href === "string" && /^https?:\/\//i.test(href) ? href : null;
+  // A link the sanitizer gutted still reads as text, but it must not dress up as
+  // something clickable that then does nothing.
+  if (!url) return <span className="md-dead-link">{children}</span>;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer noopener"
+      onClick={(event) => {
+        event.preventDefault();
+        void openUrl(url).catch(() => {});
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+/// A markdown table is the one block that can't be made to fit: its width is its
+/// content's. Wrapping it lets it scroll in its own box rather than push the
+/// bubble past the 72ch the rest of the transcript is measured to.
+function MarkdownTable({ children }: { children?: React.ReactNode }) {
+  return (
+    <div className="md-scroll">
+      <table>{children}</table>
+    </div>
+  );
+}
+
+/// Grok's output is untrusted: it routinely echoes file contents back, and a file
+/// can hold `<script>` or `<img onerror=…>`. This webview can invoke commands that
+/// touch the filesystem and spawn processes, so rendering that HTML would be remote
+/// code execution, not a defaced page — and `tauri.conf.json` sets `"csp": null`,
+/// so there is no second net under this one.
+///
+/// `disableParsingRawHTML` is what makes that safe: raw HTML is escaped to text
+/// instead of being transcribed into elements. It is load-bearing and not
+/// belt-and-braces — with it off, `<base href>` and `<form action>` in agent output
+/// render as live elements, and a `<base>` tag silently repoints every relative URL
+/// in the app. Nothing here ever reaches `dangerouslySetInnerHTML`: markdown-to-jsx
+/// compiles to a React element tree and produces no HTML string at any point.
+const MARKDOWN_OPTIONS = {
+  disableParsingRawHTML: true,
+  // Without this a one-line answer compiles to a bare inline span, so the same
+  // message would be spaced differently depending on its length.
+  forceBlock: true,
+  overrides: { a: MarkdownLink, table: MarkdownTable },
+} as const;
+
+/// Memoized on `text` alone, which is what keeps streaming from going quadratic.
+/// `reduceUpdates`/`appendText` rebuild only the bubble being appended to and leave
+/// every earlier item referentially identical, so a chunk arriving on the open
+/// bubble re-parses that one message and every finished message above it bails out
+/// here instead of re-parsing on every keystroke of the stream.
+export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
+  return <Markdown options={MARKDOWN_OPTIONS}>{text}</Markdown>;
+});
+
+/// Markdown is the agent's own idiom, so it renders for the agent's own words:
+/// `answer` and `thought` alike — the same model emits the same syntax in both, and
+/// leaving thoughts raw would show literal `**` in exactly the place the fix was
+/// asked for. `you` stays verbatim: the user didn't write markdown, and quietly
+/// reinterpreting their text is a small lie about what they typed. `error` stays
+/// verbatim too — it's backend text and must not be reformatted or swallowed.
+const RENDERS_MARKDOWN: ReadonlySet<TextItem["kind"]> = new Set(["answer", "thought"]);
+
 function TranscriptItems({
   items,
   onDecide,
@@ -1653,9 +1734,10 @@ function TranscriptItems({
     if (isAsk(item)) return <PermissionCard key={item.id} item={item} onDecide={onDecide} />;
     if (isPlan(item)) return <PlanCard key={item.id} entries={item.entries} />;
     if (isUsage(item)) return <UsageLine key={item.id} item={item} />;
+    const markdown = RENDERS_MARKDOWN.has(item.kind);
     return (
-      <div key={item.id} className={`bubble ${item.kind}`}>
-        {item.text}
+      <div key={item.id} className={`bubble ${item.kind}${markdown ? " md" : ""}`}>
+        {markdown ? <MarkdownText text={item.text} /> : item.text}
       </div>
     );
   });

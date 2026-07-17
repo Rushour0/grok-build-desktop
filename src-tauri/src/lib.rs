@@ -1397,6 +1397,33 @@ fn write_decision(tool_use_id: &str, allow: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Consume this session's claim on `tool_use_id` — "is this decision yours to make?".
+///
+/// `Ok(())` is returned at most ONCE per emitted card, because the check removes. The
+/// two ways to be told no are deliberately the same answer: `None` (this key has no
+/// session, so it never emitted anything) and "not in the set" (never emitted, or
+/// already answered) both mean the caller cannot speak for this id.
+///
+/// Split out of `respond_hook` so the property above is testable: `respond_hook` needs a
+/// live `WebviewWindow`, which cannot be constructed in a unit test, and this is the
+/// half that carries the safety argument.
+fn claim_emitted(
+    emitted: Option<Arc<Mutex<HashSet<String>>>>,
+    tool_use_id: &str,
+) -> Result<(), String> {
+    let unanswered = match emitted {
+        Some(emitted) => {
+            let mut set = emitted.lock().map_err(|e| e.to_string())?;
+            set.remove(tool_use_id)
+        }
+        None => false,
+    };
+    if !unanswered {
+        return Err("That request isn't yours.".to_string());
+    }
+    Ok(())
+}
+
 /// Answer a hook-gated tool call from the webview (Allow/Deny).
 ///
 /// Every caller must prove the card is theirs. The bridge's `resp/<toolUseId>.json`
@@ -1427,16 +1454,7 @@ fn respond_hook(
         guard.get(&key).map(|s| s.emitted.clone())
     };
 
-    let unanswered = match emitted {
-        Some(emitted) => {
-            let mut set = emitted.lock().map_err(|e| e.to_string())?;
-            set.remove(&tool_use_id)
-        }
-        None => false,
-    };
-    if !unanswered {
-        return Err("That request isn't yours.".to_string());
-    }
+    claim_emitted(emitted, &tool_use_id)?;
 
     write_decision(&tool_use_id, allow)
 }
@@ -1583,7 +1601,15 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+            // `get`, not `&s[..]`: the index is a BYTE offset into a `str`, so a `%`
+            // followed by a multi-byte char ("%aé") slices mid-character and panics.
+            // Every store walker runs this on every directory name, and a panic on the
+            // blocking pool comes back as a JoinError that `unwrap_or_default()` turns
+            // into an empty Vec — so one oddly-named directory would silently empty the
+            // whole sidebar and recents, reporting nothing. `None` here just falls
+            // through to the literal-`%` path below, which is what the "malformed
+            // escapes are left alone" contract already promises.
+            if let Ok(b) = u8::from_str_radix(s.get(i + 1..i + 3).unwrap_or(""), 16) {
                 out.push(b);
                 i += 3;
                 continue;
@@ -1593,6 +1619,24 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Does a window's cwd filter exclude this session-store folder? `None` (no filter)
+/// keeps everything.
+///
+/// **EXACT STRING COMPARE, and that is a trap worth naming.** The store's folder name is
+/// whatever the CLI percent-encoded when the session was made — the path the user
+/// originally typed. Anything that renames the same directory (canonicalizing `/tmp` to
+/// `/private/tmp` on macOS, a trailing slash, a case difference on a case-insensitive
+/// volume) compares unequal here and empties the sidebar SILENTLY: the walk returns an
+/// empty Vec, never an Err, so there is nothing for the UI to report. This is precisely
+/// why `ProjectEntry.cwd` stores the user's original path and only `ProjectEntry.key` is
+/// canonicalized (see `project_key`), and why `absolutize` refuses to resolve symlinks.
+///
+/// Split out of the two walkers so that contract is stated in one place and can be tested
+/// without a session store on disk.
+fn cwd_filter_excludes(filter: Option<&str>, folder_cwd: &str) -> bool {
+    filter.is_some_and(|filter| filter != folder_cwd)
 }
 
 /// The projects you've worked on before, read straight out of the Grok CLI's own
@@ -1665,10 +1709,7 @@ fn list_sessions_inner(cwd: Option<String>) -> Vec<SessionMeta> {
     let mut sessions = Vec::new();
     for project_entry in project_entries.flatten().filter(|entry| entry.path().is_dir()) {
         let folder_cwd = percent_decode(&project_entry.file_name().to_string_lossy());
-        if cwd
-            .as_deref()
-            .is_some_and(|filter| filter != folder_cwd.as_str())
-        {
+        if cwd_filter_excludes(cwd.as_deref(), &folder_cwd) {
             continue;
         }
 
@@ -1754,10 +1795,7 @@ fn search_sessions_inner(query: String, cwd: Option<String>) -> Vec<String> {
     let mut matches = Vec::new();
     for project_entry in project_entries.flatten().filter(|entry| entry.path().is_dir()) {
         let folder_cwd = percent_decode(&project_entry.file_name().to_string_lossy());
-        if cwd
-            .as_deref()
-            .is_some_and(|filter| filter != folder_cwd.as_str())
-        {
+        if cwd_filter_excludes(cwd.as_deref(), &folder_cwd) {
             continue;
         }
 
@@ -2709,6 +2747,28 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    // What is deliberately NOT tested here, and why — so the gaps are a decision rather
+    // than an oversight:
+    //
+    //   * Anything needing a live `AppHandle` / `WebviewWindow`: `SessionKey::for_window`,
+    //     `SessionKey::emit`, `emit_connect`, `respond_hook`, `connect_blocking`,
+    //     `open_project`, `window_project`, `pending_resume`, `shutdown_everything`, the
+    //     tray. Tauri offers no constructor for these outside a running app, and a fake
+    //     would prove only that the fake works. `claim_emitted` and `take_window` exist as
+    //     separate fns precisely so the load-bearing halves land on this side of the line.
+    //   * `drain_window`: its value type is pinned to `Session`, which owns a live `Child`
+    //     and cannot be built in a test. `take_window` is the generic seam under it and is
+    //     tested exhaustively; `drain_window` adds only the poison-tolerant lock.
+    //   * `list_sessions_inner` / `search_sessions_inner` / `recent_projects_inner`: these
+    //     read the REAL `~/.grok/sessions` store. Tests must never touch a user's data, and
+    //     there is no root parameter to point elsewhere. `cwd_filter_excludes` was split out
+    //     so the one subtle thing in them — the exact string compare — is testable alone.
+    //   * `write_decision` / `install_approval_hook` / `sweep_live_markers`: all write into
+    //     the user's real `~/.grok`. Same rule.
+    //   * `resolve_grok` / `home_dir`: probe the machine and the environment. Mutating `HOME`
+    //     from a test would race every other test in the process.
+    //   * `TEARDOWN`: a process-wide static; asserting on it would make tests order-dependent.
+
     fn key(window: &str, tab: &str) -> SessionKey {
         SessionKey {
             window: window.to_string(),
@@ -2749,6 +2809,84 @@ mod tests {
         assert_eq!(map.len(), 1, "an unmatched drain must not disturb the map");
     }
 
+    /// The degenerate case the `Destroyed` handler hits most often: a window closed
+    /// before any tab ever connected. Nothing in the map at all.
+    #[test]
+    fn take_window_empty_map_is_empty() {
+        let mut map: HashMap<SessionKey, u32> = HashMap::new();
+        assert!(take_window(&mut map, "w2").is_empty());
+        assert!(map.is_empty());
+    }
+
+    /// One window, one session — the single-window install, which is most people.
+    #[test]
+    fn take_window_single_session() {
+        let mut map: HashMap<SessionKey, u32> = HashMap::new();
+        map.insert(key("main", "1"), 11);
+
+        assert_eq!(take_window(&mut map, "main"), vec![11]);
+        assert!(map.is_empty(), "the map must be emptied, not just filtered");
+    }
+
+    /// Many windows, many tabs each, interleaved in the map. The drain must be exact at
+    /// scale — this is the shape at quit time with a real session in every window.
+    #[test]
+    fn take_window_many_windows_interleaved() {
+        let mut map: HashMap<SessionKey, u32> = HashMap::new();
+        // Tab ids repeat across every window on purpose: the frontend's `nextTabId` is
+        // per-window, so "every window has a tab 1" is the normal state of the app.
+        for (w, window) in ["main", "w2", "w3", "w4"].iter().enumerate() {
+            for tab in 1..=4u32 {
+                map.insert(key(window, &tab.to_string()), (w as u32 * 10) + tab);
+            }
+        }
+        assert_eq!(map.len(), 16);
+
+        let mut taken = take_window(&mut map, "w3");
+        taken.sort_unstable();
+        assert_eq!(taken, vec![21, 22, 23, 24], "exactly w3's four sessions");
+        assert_eq!(map.len(), 12, "the other three windows are untouched");
+        for window in ["main", "w2", "w4"] {
+            for tab in 1..=4u32 {
+                assert!(
+                    map.contains_key(&key(window, &tab.to_string())),
+                    "{window} tab {tab} must survive a w3 drain"
+                );
+            }
+        }
+    }
+
+    /// Draining the same window twice is idempotent: the second pass finds nothing. A
+    /// `Destroyed` racing `RunEvent::Exit` runs exactly this, and a double-take would mean
+    /// two threads calling `kill()` on one child.
+    #[test]
+    fn take_window_twice_yields_nothing_the_second_time() {
+        let mut map: HashMap<SessionKey, u32> = HashMap::new();
+        map.insert(key("w2", "1"), 21);
+        map.insert(key("w3", "1"), 31);
+
+        assert_eq!(take_window(&mut map, "w2"), vec![21]);
+        assert!(take_window(&mut map, "w2").is_empty());
+        assert_eq!(map.len(), 1, "w3 survives both passes");
+    }
+
+    /// The match is EXACT EQUALITY, never a prefix. `w2` and `w22` are different windows,
+    /// and the registry's counter mints both once you have opened ten projects. A
+    /// `starts_with` here would silently kill a live window's grok children when a
+    /// completely different window closed.
+    #[test]
+    fn take_window_label_match_is_exact_not_prefix() {
+        let mut map: HashMap<SessionKey, u32> = HashMap::new();
+        map.insert(key("w2", "1"), 21);
+        map.insert(key("w22", "1"), 221);
+        map.insert(key("w222", "1"), 2221);
+
+        assert_eq!(take_window(&mut map, "w2"), vec![21]);
+        assert_eq!(map.len(), 2, "w22 and w222 are NOT w2");
+        assert_eq!(map.get(&key("w22", "1")), Some(&221));
+        assert_eq!(map.get(&key("w222", "1")), Some(&2221));
+    }
+
     /// A `SessionKey` is only equal to itself: neither half alone is an identity. This
     /// is the whole point of the re-key — a bare tab id is ambiguous across windows.
     #[test]
@@ -2756,6 +2894,74 @@ mod tests {
         assert_ne!(key("w2", "1"), key("w3", "1"), "same tab, other window");
         assert_ne!(key("w2", "1"), key("w2", "2"), "same window, other tab");
         assert_eq!(key("w2", "1"), key("w2", "1"));
+    }
+
+    /// The window half alone is not an identity: one window's two tabs are two sessions.
+    #[test]
+    fn session_key_window_alone_is_not_an_identity() {
+        let mut map: HashMap<SessionKey, u32> = HashMap::new();
+        map.insert(key("w2", "1"), 1);
+        map.insert(key("w2", "2"), 2);
+        map.insert(key("w2", "3"), 3);
+        assert_eq!(map.len(), 3, "three tabs in one window are three sessions");
+    }
+
+    /// The tab half alone is not an identity: the same tab id in two windows is two
+    /// sessions, and this is the COMMON case, not a corner one — `nextTabId` restarts at
+    /// 1 in every window, so window A's tab 1 and window B's tab 1 always coexist.
+    #[test]
+    fn session_key_tab_alone_is_not_an_identity() {
+        let mut map: HashMap<SessionKey, u32> = HashMap::new();
+        map.insert(key("main", "1"), 11);
+        map.insert(key("w2", "1"), 21);
+        map.insert(key("w3", "1"), 31);
+        assert_eq!(map.len(), 3, "one tab id, three windows, three sessions");
+        assert_eq!(map.get(&key("w2", "1")), Some(&21), "no cross-window aliasing");
+    }
+
+    /// Re-inserting the same key replaces — that is what makes a reconnect displace its
+    /// own session (and only its own) in `connect_blocking`.
+    #[test]
+    fn session_key_equal_keys_collide_in_a_map() {
+        let mut map: HashMap<SessionKey, u32> = HashMap::new();
+        assert_eq!(map.insert(key("w2", "1"), 1), None);
+        assert_eq!(map.insert(key("w2", "1"), 2), Some(1), "same key replaces");
+        assert_eq!(map.len(), 1);
+    }
+
+    /// The two halves must not be concatenatable into each other. A key built by gluing
+    /// the strings together ("a" + "bc" == "ab" + "c") would alias two distinct sessions;
+    /// the derived `Hash`/`Eq` over two separate `String` fields is what prevents it.
+    #[test]
+    fn session_key_halves_do_not_bleed_into_each_other() {
+        assert_ne!(key("a", "bc"), key("ab", "c"));
+        assert_ne!(key("", "w21"), key("w2", "1"));
+
+        let mut map: HashMap<SessionKey, u32> = HashMap::new();
+        map.insert(key("a", "bc"), 1);
+        map.insert(key("ab", "c"), 2);
+        assert_eq!(map.len(), 2, "no boundary-ambiguity collision");
+    }
+
+    /// Empty halves are still distinct values, not wildcards.
+    #[test]
+    fn session_key_empty_halves_are_distinct_values() {
+        assert_ne!(key("", "1"), key("1", ""));
+        assert_ne!(key("", ""), key("w2", ""));
+        assert_eq!(key("", ""), key("", ""));
+    }
+
+    /// A clone is the same identity — `SessionKey` is cloned into every reader thread,
+    /// stderr drain and watcher, and each must still address the tab it came from.
+    #[test]
+    fn session_key_clone_is_the_same_identity() {
+        let original = key("w2", "1");
+        let cloned = original.clone();
+        assert_eq!(original, cloned);
+
+        let mut map: HashMap<SessionKey, u32> = HashMap::new();
+        map.insert(original, 21);
+        assert_eq!(map.get(&cloned), Some(&21), "a clone must find its own entry");
     }
 
     #[cfg(desktop)]
@@ -2844,6 +3050,1692 @@ mod tests {
             pick_session_cwd(store(), "not-a-real-id"),
             None,
             "an unknown id must resolve to nothing, never to the first project"
+        );
+    }
+
+    /// An empty store answers nothing. `--resume` on a machine that has never run grok
+    /// must say "no such conversation", not panic and not guess.
+    #[cfg(desktop)]
+    #[test]
+    fn pick_session_cwd_empty_store_is_none() {
+        assert_eq!(pick_session_cwd(Vec::new(), "any-id"), None);
+    }
+
+    /// The id match is exact. A session id that merely CONTAINS or PREFIXES the query must
+    /// not answer for it — resolving `--resume abc` onto `abcdef`'s project would open a
+    /// window on a folder the user never named.
+    #[cfg(desktop)]
+    #[test]
+    fn pick_session_cwd_matches_the_whole_id_only() {
+        let store = || {
+            vec![
+                meta("abcdef", "/tmp/long"),
+                meta("xyz-abc", "/tmp/suffix"),
+            ]
+        };
+        assert_eq!(pick_session_cwd(store(), "abc"), None, "not a prefix match");
+        assert_eq!(pick_session_cwd(store(), "def"), None, "not a suffix match");
+        assert_eq!(pick_session_cwd(store(), "bcde"), None, "not a substring match");
+        assert_eq!(
+            pick_session_cwd(store(), "abcdef"),
+            Some("/tmp/long".to_string())
+        );
+    }
+
+    /// The cwd handed back is `info.cwd` verbatim — including a path with a space, which
+    /// is ordinary on macOS ("~/Documents/My Project") and is the input most likely to be
+    /// mangled by anything that re-parses it.
+    #[cfg(desktop)]
+    #[test]
+    fn pick_session_cwd_returns_the_path_verbatim() {
+        let sessions = vec![meta("id-1", "/Users/x/My Projects/café app")];
+        assert_eq!(
+            pick_session_cwd(sessions, "id-1"),
+            Some("/Users/x/My Projects/café app".to_string()),
+            "spaces and unicode must survive untouched"
+        );
+    }
+
+    // ---- Tier 1: the approval `emitted` set -----------------------------------
+    //
+    // `claim_emitted` is the whole answer to "is this decision yours to make?". The
+    // bridge's `resp/<toolUseId>.json` namespace is flat and global, so if this check is
+    // ever weakened, any window can approve any other window's file write — with the id
+    // sitting right there in the event payload.
+
+    fn emitted_set(ids: &[&str]) -> Arc<Mutex<HashSet<String>>> {
+        Arc::new(Mutex::new(
+            ids.iter().map(|id| id.to_string()).collect::<HashSet<_>>(),
+        ))
+    }
+
+    /// An id that was never emitted is not answerable. This is the cross-window steal:
+    /// window B names window A's tool-use id, and its own session never showed that card.
+    #[test]
+    fn claim_emitted_refuses_an_id_that_was_never_emitted() {
+        let set = emitted_set(&["mine-1"]);
+        assert_eq!(
+            claim_emitted(Some(set.clone()), "someone-elses-id"),
+            Err("That request isn't yours.".to_string())
+        );
+        assert_eq!(
+            set.lock().unwrap().len(),
+            1,
+            "a refused claim must not disturb the cards that ARE ours"
+        );
+    }
+
+    /// An empty set answers for nothing. A tab that has never been asked about anything
+    /// cannot approve anything.
+    #[test]
+    fn claim_emitted_empty_set_refuses_everything() {
+        let set = emitted_set(&[]);
+        assert!(claim_emitted(Some(set), "any-id").is_err());
+    }
+
+    /// No session for this key at all (the tab was cancelled, the window closed, or the
+    /// key never existed) is the same answer as "not yours" — never a pass.
+    #[test]
+    fn claim_emitted_no_session_refuses() {
+        assert_eq!(
+            claim_emitted(None, "anything"),
+            Err("That request isn't yours.".to_string())
+        );
+    }
+
+    /// The core property: an emitted id is answerable EXACTLY ONCE. The check consumes,
+    /// so a double-click, a duplicated event, or a second window racing the same id all
+    /// land on the second call and are refused.
+    #[test]
+    fn claim_emitted_is_consuming_exactly_once() {
+        let set = emitted_set(&["tuid-1"]);
+
+        assert!(claim_emitted(Some(set.clone()), "tuid-1").is_ok(), "first answer wins");
+        assert!(
+            claim_emitted(Some(set.clone()), "tuid-1").is_err(),
+            "the second answer must be refused — the check REMOVES"
+        );
+        assert!(
+            claim_emitted(Some(set.clone()), "tuid-1").is_err(),
+            "and stays refused"
+        );
+        assert!(set.lock().unwrap().is_empty(), "consuming keeps the set bounded");
+    }
+
+    /// Claiming one card leaves every other card on the same tab answerable. A tab can
+    /// have several approvals on screen at once, and answering the first must not
+    /// invalidate the rest.
+    #[test]
+    fn claim_emitted_consumes_only_the_claimed_id() {
+        let set = emitted_set(&["a", "b", "c"]);
+
+        assert!(claim_emitted(Some(set.clone()), "b").is_ok());
+        assert_eq!(set.lock().unwrap().len(), 2);
+        assert!(claim_emitted(Some(set.clone()), "a").is_ok(), "a is still answerable");
+        assert!(claim_emitted(Some(set.clone()), "c").is_ok(), "c is still answerable");
+        assert!(set.lock().unwrap().is_empty());
+    }
+
+    /// The claim is by exact id. A prefix or substring of a live card's id must not
+    /// consume it — ids come off the wire from the webview, so a loose match here is a
+    /// forgery surface.
+    #[test]
+    fn claim_emitted_matches_the_whole_id_only() {
+        let set = emitted_set(&["toolu_01ABCDEF"]);
+
+        assert!(claim_emitted(Some(set.clone()), "toolu_01").is_err(), "no prefix match");
+        assert!(claim_emitted(Some(set.clone()), "ABCDEF").is_err(), "no suffix match");
+        assert!(claim_emitted(Some(set.clone()), "").is_err(), "empty claims nothing");
+        assert_eq!(set.lock().unwrap().len(), 1, "the real card is still pending");
+        assert!(claim_emitted(Some(set), "toolu_01ABCDEF").is_ok());
+    }
+
+    /// Two sessions' sets are independent objects. This is the shape after
+    /// `connect_blocking` carries one tab's Arc across a displacement while another tab's
+    /// set stays its own: consuming from one must never reach into the other.
+    #[test]
+    fn claim_emitted_sets_are_per_session() {
+        let window_a = emitted_set(&["shared-looking-id"]);
+        let window_b = emitted_set(&["shared-looking-id"]);
+
+        assert!(claim_emitted(Some(window_a.clone()), "shared-looking-id").is_ok());
+        assert!(
+            window_a.lock().unwrap().is_empty(),
+            "A's card is consumed"
+        );
+        assert_eq!(
+            window_b.lock().unwrap().len(),
+            1,
+            "B's identically-named card is untouched — the sets do not alias"
+        );
+        assert!(
+            claim_emitted(Some(window_b), "shared-looking-id").is_ok(),
+            "and B can still answer its own"
+        );
+    }
+
+    /// A carried Arc is the SAME set. `connect_blocking` and `load_existing_session` both
+    /// clone this Arc into a replacement Session so a card already on screen stays
+    /// answerable across a reconnect; if the clone ever became a deep copy, the app would
+    /// reject a click on a card it drew itself.
+    #[test]
+    fn claim_emitted_carried_arc_shares_one_set() {
+        let original = emitted_set(&["tuid-1"]);
+        let carried = original.clone(); // exactly what connect_blocking does
+
+        assert!(claim_emitted(Some(carried.clone()), "tuid-1").is_ok());
+        assert!(
+            original.lock().unwrap().is_empty(),
+            "the carried Arc must be the same set, not a copy"
+        );
+        assert!(
+            claim_emitted(Some(original), "tuid-1").is_err(),
+            "and one card still gets exactly one answer through either handle"
+        );
+    }
+
+    // ---- Tier 1: install_stage bucketing --------------------------------------
+
+    /// Every arm reachable from a line install.sh actually prints, checked against the
+    /// real script rather than inferred.
+    #[test]
+    fn install_stage_buckets_real_installer_lines() {
+        assert_eq!(install_stage("Fetching latest stable version..."), "resolving");
+        assert_eq!(install_stage("  Downloading grok 0.2.102..."), "downloading");
+        assert_eq!(
+            install_stage("  Updated /Users/x/.grok/bin in PATH in /Users/x/.zshrc."),
+            "configuring"
+        );
+        // The fallback arm, reached by the two lines that close a successful install.
+        assert_eq!(
+            install_stage("  Binary linked to /usr/local/bin/grok"),
+            "installing"
+        );
+        assert_eq!(
+            install_stage("Grok 0.2.102 installed to /Users/x/.grok/bin/grok"),
+            "installing"
+        );
+    }
+
+    /// The channel is interpolated into the "Fetching latest ${CHANNEL} version..." line,
+    /// so every channel must still resolve — the match is on the invariant prefix.
+    #[test]
+    fn install_stage_resolving_survives_any_channel() {
+        for channel in ["stable", "beta", "nightly", ""] {
+            assert_eq!(
+                install_stage(&format!("Fetching latest {channel} version...")),
+                "resolving",
+                "channel {channel:?} must still bucket as resolving"
+            );
+        }
+    }
+
+    /// Matching is case-insensitive: the fn lowercases first, and the installer's own
+    /// capitalisation is not a contract we control.
+    #[test]
+    fn install_stage_is_case_insensitive() {
+        assert_eq!(install_stage("FETCHING LATEST STABLE VERSION"), "resolving");
+        assert_eq!(install_stage("DOWNLOADING GROK"), "downloading");
+        assert_eq!(install_stage("Updated BIN_DIR in path"), "configuring");
+    }
+
+    /// `INSTALL_MARKER` is the gate in `spawn_install_reader`: nothing renders until a line
+    /// contains it, so the marker line is ALWAYS the first line the user sees bucketed. It
+    /// must therefore bucket as `resolving` — if the two ever drift, the first visible
+    /// stage silently becomes the "installing" fallback.
+    #[test]
+    fn install_marker_line_buckets_as_resolving() {
+        assert_eq!(install_stage(INSTALL_MARKER), "resolving");
+        assert_eq!(
+            install_stage("Fetching latest stable version...").to_string(),
+            install_stage(INSTALL_MARKER).to_string(),
+            "the marker and the real line must agree"
+        );
+    }
+
+    /// There is deliberately NO verifying/extracting arm: install.sh prints no such line
+    /// (it downloads a bare binary and its only check is a silent `--version` smoke test).
+    /// A bucket that can never fire is a stage we would be claiming exists. Pin the
+    /// absence so nobody re-adds one.
+    #[test]
+    fn install_stage_has_no_verifying_or_extracting_bucket() {
+        assert_eq!(
+            install_stage("  Verifying checksum..."),
+            "installing",
+            "a verify line must fall to the honest fallback, not mint a `verifying` stage"
+        );
+        assert_eq!(install_stage("  Extracting archive..."), "installing");
+        assert_eq!(install_stage("  Unpacking..."), "installing");
+        assert_eq!(install_stage("  Validating signature..."), "installing");
+    }
+
+    /// The label set is CLOSED — exactly four buckets. The frontend switches on these
+    /// strings, so a fifth label invented here renders as nothing at all.
+    #[test]
+    fn install_stage_only_ever_returns_the_four_known_labels() {
+        const KNOWN: [&str; 4] = ["resolving", "downloading", "configuring", "installing"];
+        let corpus = [
+            "Fetching latest stable version...",
+            "  Downloading grok 0.2.102...",
+            "  Updated /Users/x/.grok/bin in PATH in /Users/x/.zshrc.",
+            "  Binary linked to /usr/local/bin/grok",
+            "Grok 0.2.102 installed to /Users/x/.grok/bin/grok",
+            "",
+            "   ",
+            "curl: (22) The requested URL returned error: 404",
+            "bash: line 1: syntax error near unexpected token",
+            "Verifying...",
+            "🎉 done",
+        ];
+        for line in corpus {
+            let stage = install_stage(line);
+            assert!(
+                KNOWN.contains(&stage),
+                "line {line:?} produced unknown stage {stage:?}"
+            );
+        }
+    }
+
+    /// An empty or whitespace line falls to the fallback rather than panicking. The
+    /// reader filters empties before calling, so this is belt-and-braces on a fn whose
+    /// input is a foreign script's stdout.
+    #[test]
+    fn install_stage_empty_line_falls_back() {
+        assert_eq!(install_stage(""), "installing");
+        assert_eq!(install_stage("   "), "installing");
+    }
+
+    /// Arm order is load-bearing where a line could match two: "downloading" is checked
+    /// before "path", so a download line mentioning a path still reads as downloading.
+    #[test]
+    fn install_stage_earlier_arms_win() {
+        assert_eq!(
+            install_stage("  Downloading grok to $PATH..."),
+            "downloading",
+            "downloading is checked before the path arm"
+        );
+        assert_eq!(
+            install_stage("Fetching latest stable version from a path..."),
+            "resolving",
+            "resolving is checked first of all"
+        );
+    }
+
+    // ---- Tier 2: parse_cli_args ------------------------------------------------
+
+    /// `--resume` takes the NEXT argv item verbatim, even when it looks like a flag. A
+    /// session id is a UUID, so this never mis-fires in practice; when it does, the id is
+    /// checked against the store by `resolve_session` and comes back as a clear "No
+    /// conversation with id `--foo`" rather than a silent launcher.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_resume_takes_the_next_arg_verbatim() {
+        assert_eq!(
+            parse_cli_args(argv(&["--resume", "--foo"])),
+            Ok(CliRequest::Resume("--foo".to_string())),
+            "the value is not re-parsed as a flag; the disk gate rejects it downstream"
+        );
+    }
+
+    /// A path AND `--resume` together: the first bare positional wins, exactly as
+    /// documented. `--resume` after it is never reached.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_path_before_resume_takes_the_path() {
+        assert_eq!(
+            parse_cli_args(argv(&["/tmp/projB", "--resume", "some-id"])),
+            Ok(CliRequest::Project("/tmp/projB".to_string())),
+            "the first bare positional wins"
+        );
+    }
+
+    /// `--resume` before a path: the resume returns immediately and the trailing path is
+    /// never consumed. The two orders give different answers, and that is the documented
+    /// "first thing recognised wins" rule, not an accident.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_resume_before_path_takes_the_resume() {
+        assert_eq!(
+            parse_cli_args(argv(&["--resume", "some-id", "/tmp/projB"])),
+            Ok(CliRequest::Resume("some-id".to_string()))
+        );
+    }
+
+    /// Every unknown `-`-prefixed arg is IGNORED, never an error. macOS hands a
+    /// double-clicked GUI binary `-psn_0_...`; erroring on an unknown flag would turn
+    /// every single Finder launch into a failure. This is the regression that would be
+    /// invisible in a terminal and total in the wild.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_ignores_every_unknown_flag() {
+        for flag in ["-psn_0_12345", "-NSDocumentRevisionsDebugMode", "--verbose", "-v", "-"] {
+            assert_eq!(
+                parse_cli_args(argv(&[flag])),
+                Ok(CliRequest::Launcher),
+                "{flag} must be ignored, not rejected"
+            );
+        }
+    }
+
+    /// Several unknown flags before the path, which is what a real Finder/Spotlight
+    /// launch with an argument looks like.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_skips_a_run_of_flags_to_find_the_path() {
+        assert_eq!(
+            parse_cli_args(argv(&["-psn_0_12345", "-v", "--debug", "/tmp/projB"])),
+            Ok(CliRequest::Project("/tmp/projB".to_string()))
+        );
+    }
+
+    /// Flags do not hide a `--resume` further down the line.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_finds_resume_after_flags() {
+        assert_eq!(
+            parse_cli_args(argv(&["-psn_0_12345", "--resume", "an-id"])),
+            Ok(CliRequest::Resume("an-id".to_string()))
+        );
+    }
+
+    /// A dangling or blank `--resume` is an ERROR, not a silent launcher. The user asked
+    /// for a conversation; degrading to the launcher would never tell them they didn't
+    /// get one.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_rejects_a_valueless_resume() {
+        assert!(parse_cli_args(argv(&["--resume"])).is_err(), "no value at all");
+        assert!(parse_cli_args(argv(&["--resume", ""])).is_err(), "empty value");
+        assert!(parse_cli_args(argv(&["--resume", "   "])).is_err(), "blank value");
+        assert!(parse_cli_args(argv(&["--resume", "\t\n"])).is_err(), "whitespace value");
+    }
+
+    /// The error names the flag, so a terminal launch says what went wrong.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_resume_error_mentions_the_flag() {
+        let err = parse_cli_args(argv(&["--resume"])).unwrap_err();
+        assert!(err.contains("--resume"), "unhelpful error: {err}");
+    }
+
+    /// An empty argv is the launcher. This is the no-regression promise: it is what every
+    /// Finder double-click takes, because a `.app` opened that way is handed no argv.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_empty_argv_is_the_launcher() {
+        assert_eq!(parse_cli_args(argv(&[])), Ok(CliRequest::Launcher));
+    }
+
+    /// An empty-string positional is a positional, not a flag and not a skip. It resolves
+    /// downstream through `absolutize("")` -> the current directory, which is the same
+    /// place `.` goes — so the behaviour is odd but never wrong.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_empty_positional_is_a_path() {
+        assert_eq!(
+            parse_cli_args(argv(&[""])),
+            Ok(CliRequest::Project(String::new()))
+        );
+    }
+
+    /// The path is taken verbatim — not trimmed, not normalised, not resolved. Parsing is
+    /// PURE; proving the path names something real is `resolve_project`'s job alone.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_takes_the_path_verbatim() {
+        for path in [
+            "/tmp/projB",
+            "../projB",
+            "./projB/",
+            "~/projects/x",
+            "/Users/x/My Project",
+            "/tmp/café",
+            "relative/nested/path",
+        ] {
+            assert_eq!(
+                parse_cli_args(argv(&[path])),
+                Ok(CliRequest::Project(path.to_string())),
+                "{path} must survive parsing untouched"
+            );
+        }
+    }
+
+    /// A second positional is ignored — only the first is the project.
+    #[cfg(desktop)]
+    #[test]
+    fn parse_cli_args_ignores_extra_positionals() {
+        assert_eq!(
+            parse_cli_args(argv(&["/tmp/a", "/tmp/b"])),
+            Ok(CliRequest::Project("/tmp/a".to_string()))
+        );
+    }
+
+    // ---- Tier 2: percent_decode ------------------------------------------------
+
+    /// A `%` followed by a multi-byte char used to panic: the 2-byte window is a
+    /// BYTE slice into a `str`, so it cut mid-character. Every store walker decodes
+    /// every directory name, and the panic surfaced as an empty sidebar, not an error.
+    #[test]
+    fn percent_decode_survives_an_escape_that_cuts_a_multibyte_char() {
+        assert_eq!(percent_decode("%a\u{e9}"), "%a\u{e9}");
+        assert_eq!(percent_decode("%\u{e9}\u{e9}"), "%\u{e9}\u{e9}");
+        assert_eq!(percent_decode("%2Ftmp%2F\u{e9}"), "/tmp/\u{e9}");
+    }
+
+    /// The round-trip the session store depends on: `~/.grok/sessions/<pct-encoded cwd>/`.
+    #[test]
+    fn percent_decode_round_trips_a_project_path() {
+        assert_eq!(percent_decode("%2Ftmp%2FprojB"), "/tmp/projB");
+        assert_eq!(
+            percent_decode("%2FUsers%2Fx%2Fgba%2Ffabri"),
+            "/Users/x/gba/fabri"
+        );
+    }
+
+    /// A path with a space — ordinary on macOS ("~/Documents/My Project") and the single
+    /// most likely thing to be encoded.
+    #[test]
+    fn percent_decode_handles_spaces() {
+        assert_eq!(
+            percent_decode("%2FUsers%2Fx%2FMy%20Project"),
+            "/Users/x/My Project"
+        );
+    }
+
+    /// Multi-byte UTF-8 arrives as two escapes and must reassemble into one char.
+    #[test]
+    fn percent_decode_handles_unicode() {
+        assert_eq!(percent_decode("%2Ftmp%2Fcaf%C3%A9"), "/tmp/café");
+        assert_eq!(percent_decode("caf%C3%A9"), "café");
+        // Four bytes, one emoji.
+        assert_eq!(percent_decode("%F0%9F%8E%89"), "🎉");
+    }
+
+    /// An escaped percent decodes to a literal one, and does not then re-decode what
+    /// follows it.
+    #[test]
+    fn percent_decode_handles_an_escaped_percent() {
+        assert_eq!(percent_decode("%25"), "%");
+        assert_eq!(percent_decode("100%25"), "100%");
+        assert_eq!(percent_decode("%252F"), "%2F", "one pass only, never recursive");
+    }
+
+    /// A path with nothing to decode passes through untouched.
+    #[test]
+    fn percent_decode_passes_plain_text_through() {
+        assert_eq!(percent_decode("/tmp/projB"), "/tmp/projB");
+        assert_eq!(percent_decode("projB"), "projB");
+        assert_eq!(percent_decode(""), "");
+    }
+
+    /// A `%` that isn't a valid escape stays a literal `%`. Folder names are not ours and
+    /// a stray percent must not eat the next two characters.
+    #[test]
+    fn percent_decode_leaves_malformed_escapes_alone() {
+        assert_eq!(percent_decode("%zz"), "%zz", "not hex");
+        assert_eq!(percent_decode("%2"), "%2", "truncated at the end");
+        assert_eq!(percent_decode("%"), "%", "a bare trailing percent");
+        assert_eq!(percent_decode("50%%"), "50%%");
+        assert_eq!(percent_decode("a%gg%2Fb"), "a%gg/b", "recovers after a bad escape");
+    }
+
+    /// Lowercase hex decodes the same as uppercase — `from_str_radix` accepts both.
+    #[test]
+    fn percent_decode_accepts_either_hex_case() {
+        assert_eq!(percent_decode("%2f%2F"), "//");
+        assert_eq!(percent_decode("%c3%a9"), "é");
+    }
+
+    /// An escape at the very end of the string is still decoded — the bounds check is
+    /// `i + 2 < len`, which is exactly enough room for two hex digits.
+    #[test]
+    fn percent_decode_decodes_a_trailing_escape() {
+        assert_eq!(percent_decode("tmp%2F"), "tmp/");
+        assert_eq!(percent_decode("%2F"), "/");
+    }
+
+    // ---- Tier 2: the /tmp vs /private/tmp symlink trap -------------------------
+
+    /// No filter keeps everything — this is the launcher's sidebar, showing every project.
+    #[test]
+    fn cwd_filter_none_keeps_everything() {
+        assert!(!cwd_filter_excludes(None, "/tmp/projB"));
+        assert!(!cwd_filter_excludes(None, ""));
+    }
+
+    /// An exact match keeps the folder. The happy path: `ProjectEntry.cwd` is the string
+    /// the user picked, and the CLI encoded that same string into the folder name.
+    #[test]
+    fn cwd_filter_exact_match_keeps() {
+        assert!(!cwd_filter_excludes(Some("/tmp/projB"), "/tmp/projB"));
+        assert!(!cwd_filter_excludes(Some(""), ""));
+    }
+
+    /// A different project is excluded. This is the feature: a window shows its own
+    /// project's conversations and no one else's.
+    #[test]
+    fn cwd_filter_other_project_is_excluded() {
+        assert!(cwd_filter_excludes(Some("/tmp/projB"), "/tmp/projA"));
+        assert!(cwd_filter_excludes(Some("/tmp/projB"), "/Users/x/gba/fabri"));
+    }
+
+    /// THE TRAP, pinned. The compare is exact, so a canonicalized path does NOT match the
+    /// folder the CLI stored — macOS canonicalizes `/tmp` to `/private/tmp` while grok
+    /// wrote the session under `/tmp`. The failure is silent: the walk returns an empty
+    /// Vec, never an Err, so the sidebar just goes blank with nothing to report.
+    ///
+    /// This is why `absolutize` refuses to resolve symlinks and why `ProjectEntry` keeps
+    /// `cwd` and `key` as two fields. If this test ever fails, someone has changed the
+    /// compare — and the two guards above are now load-bearing for nothing.
+    #[test]
+    fn cwd_filter_canonicalized_path_does_not_match_the_stored_folder() {
+        assert!(
+            cwd_filter_excludes(Some("/private/tmp/projB"), "/tmp/projB"),
+            "a canonicalized filter silently empties the sidebar — do not hand one in"
+        );
+        assert!(
+            cwd_filter_excludes(Some("/private/var/x/proj"), "/var/x/proj"),
+            "the same trap on /var, which is the one users actually hit"
+        );
+    }
+
+    /// A trailing slash is a different string and therefore a different project. Another
+    /// face of the same trap.
+    #[test]
+    fn cwd_filter_trailing_slash_does_not_match() {
+        assert!(cwd_filter_excludes(Some("/tmp/projB/"), "/tmp/projB"));
+        assert!(cwd_filter_excludes(Some("/tmp/projB"), "/tmp/projB/"));
+    }
+
+    /// The compare is case-SENSITIVE even though macOS's default volume is not. A cwd
+    /// that differs only in case names the same directory to the OS and a different one
+    /// here.
+    #[test]
+    fn cwd_filter_is_case_sensitive() {
+        assert!(cwd_filter_excludes(Some("/tmp/ProjB"), "/tmp/projb"));
+    }
+
+    /// No prefix or substring matching: a parent directory does not match its child, so
+    /// opening `/tmp` does not pull in `/tmp/projB`'s conversations.
+    #[test]
+    fn cwd_filter_has_no_prefix_matching() {
+        assert!(cwd_filter_excludes(Some("/tmp"), "/tmp/projB"));
+        assert!(cwd_filter_excludes(Some("/tmp/projB"), "/tmp"));
+        assert!(cwd_filter_excludes(Some("/tmp/proj"), "/tmp/projB"));
+    }
+
+    // ---- Tier 2: window_title / basename ---------------------------------------
+
+    /// The title is the app, then the folder — the folder alone says nothing in a dock or
+    /// a window switcher.
+    #[test]
+    fn window_title_names_the_app_and_the_folder() {
+        assert_eq!(window_title("/tmp/projB"), "Grok Build Desktop — projB");
+        assert_eq!(
+            window_title("/Users/x/gba/fabri"),
+            "Grok Build Desktop — fabri"
+        );
+    }
+
+    /// A folder name with a space or unicode reaches the title unmangled.
+    #[test]
+    fn window_title_survives_spaces_and_unicode() {
+        assert_eq!(
+            window_title("/Users/x/My Project"),
+            "Grok Build Desktop — My Project"
+        );
+        assert_eq!(window_title("/tmp/café"), "Grok Build Desktop — café");
+    }
+
+    /// A root cwd has no folder name; `basename` falls back to the path itself, so the
+    /// title reads "Grok Build Desktop — /". Odd-looking, but honest and never empty.
+    #[test]
+    fn window_title_of_root() {
+        assert_eq!(window_title("/"), "Grok Build Desktop — /");
+    }
+
+    /// A trailing slash takes `basename`'s whole-path fallback (see
+    /// `basename_trailing_slash_falls_back_to_the_whole_path`), so the title shows the
+    /// full path. Not reachable from either real source of a cwd — the folder dialog and
+    /// `absolutize` both produce slash-free paths — but pinned so the coupling is visible.
+    #[test]
+    fn window_title_of_a_trailing_slash_cwd_shows_the_whole_path() {
+        assert_eq!(
+            window_title("/tmp/projB/"),
+            "Grok Build Desktop — /tmp/projB/"
+        );
+    }
+
+    /// The separator is an em dash, not a hyphen. It is in the string the user reads.
+    #[test]
+    fn window_title_uses_an_em_dash() {
+        let title = window_title("/tmp/projB");
+        assert!(title.contains(" — "), "expected an em dash in {title:?}");
+        assert!(title.starts_with("Grok Build Desktop"));
+    }
+
+    /// The ordinary case: the last path segment.
+    #[test]
+    fn basename_takes_the_last_segment() {
+        assert_eq!(basename("/tmp/projB"), "projB");
+        assert_eq!(basename("/a/b/c/d/e"), "e");
+        assert_eq!(basename("/Users/x/My Project"), "My Project");
+    }
+
+    /// A bare name with no separator is already its own basename.
+    #[test]
+    fn basename_of_a_single_segment() {
+        assert_eq!(basename("projB"), "projB");
+        assert_eq!(basename("Cargo.toml"), "Cargo.toml");
+    }
+
+    /// Windows separators count too — `build_permission_payload` runs `basename` on a
+    /// `file_path` that grok produced, which is backslash-separated on Windows.
+    #[test]
+    fn basename_handles_windows_separators() {
+        assert_eq!(basename(r"C:\Users\x\projB"), "projB");
+        assert_eq!(basename(r"C:\Users\x\projB\src\lib.rs"), "lib.rs");
+        assert_eq!(basename("/mixed/path\\segment"), "segment");
+    }
+
+    /// With no last segment to show, `basename` deliberately falls back to the whole path
+    /// rather than to an empty string — an empty title or an empty "Edit " in an approval
+    /// card would be strictly worse than a long one.
+    #[test]
+    fn basename_trailing_slash_falls_back_to_the_whole_path() {
+        assert_eq!(basename("/tmp/projB/"), "/tmp/projB/");
+        assert_eq!(basename(r"C:\Users\x\projB\"), r"C:\Users\x\projB\");
+    }
+
+    /// Root is its own name, via the same fallback.
+    #[test]
+    fn basename_of_root() {
+        assert_eq!(basename("/"), "/");
+    }
+
+    /// Empty in, empty out. The fallback cannot invent a name.
+    #[test]
+    fn basename_of_empty_is_empty() {
+        assert_eq!(basename(""), "");
+    }
+
+    /// A dotfile directory is an ordinary segment.
+    #[test]
+    fn basename_of_a_dotfile() {
+        assert_eq!(basename("/Users/x/.grok"), ".grok");
+        assert_eq!(basename("/Users/x/.config/nvim"), "nvim");
+    }
+
+    // ---- Tier 3: with_tab_id ---------------------------------------------------
+
+    /// An object payload gets `tabId` stamped in beside its own keys. `with_tab_id` is the
+    /// ONLY writer of `tabId` in this file — every session event routes through it.
+    #[test]
+    fn with_tab_id_stamps_an_object_in_place() {
+        let out = with_tab_id(json!({"stage": "ready", "sessionId": "s1"}), "3");
+        assert_eq!(out["tabId"], json!("3"));
+        assert_eq!(out["stage"], json!("ready"), "existing keys survive");
+        assert_eq!(out["sessionId"], json!("s1"));
+        assert_eq!(out.as_object().unwrap().len(), 3, "nothing else is added");
+    }
+
+    /// An empty object is still an object — it gets stamped, not wrapped.
+    #[test]
+    fn with_tab_id_stamps_an_empty_object() {
+        let out = with_tab_id(json!({}), "1");
+        assert_eq!(out, json!({"tabId": "1"}));
+    }
+
+    /// **The agent must not be able to spoof its own route.** `params` on an
+    /// `acp-update` is grok's bytes, so a payload arriving with its own `tabId` must be
+    /// OVERWRITTEN by ours, never allowed to stand. Insert-over is what makes the last
+    /// word Rust's.
+    #[test]
+    fn with_tab_id_overwrites_an_incoming_tab_id() {
+        let out = with_tab_id(json!({"tabId": "99", "text": "hi"}), "3");
+        assert_eq!(
+            out["tabId"],
+            json!("3"),
+            "a payload-supplied tabId must never win"
+        );
+        assert_eq!(out["text"], json!("hi"));
+    }
+
+    /// A non-object payload is wrapped rather than stamped — there is nowhere to put a key
+    /// on a bare scalar.
+    #[test]
+    fn with_tab_id_wraps_a_non_object() {
+        assert_eq!(
+            with_tab_id(json!("just a string"), "2"),
+            json!({"tabId": "2", "payload": "just a string"})
+        );
+        assert_eq!(
+            with_tab_id(json!(42), "2"),
+            json!({"tabId": "2", "payload": 42})
+        );
+        assert_eq!(
+            with_tab_id(json!(null), "2"),
+            json!({"tabId": "2", "payload": null})
+        );
+        assert_eq!(
+            with_tab_id(json!(true), "2"),
+            json!({"tabId": "2", "payload": true})
+        );
+    }
+
+    /// An array is not an object either — `spawn_reader` forwards `params` verbatim, and
+    /// JSON-RPC permits array params.
+    #[test]
+    fn with_tab_id_wraps_an_array() {
+        assert_eq!(
+            with_tab_id(json!([1, 2, 3]), "2"),
+            json!({"tabId": "2", "payload": [1, 2, 3]})
+        );
+    }
+
+    /// The tab id is stamped as a JSON string, whatever it looks like. The frontend keys
+    /// its ref-maps on `tabId` as a string; a number would silently miss every lookup.
+    #[test]
+    fn with_tab_id_always_stamps_a_string() {
+        let out = with_tab_id(json!({}), "42");
+        assert!(out["tabId"].is_string(), "tabId must be a JSON string");
+        assert_eq!(out["tabId"], json!("42"));
+    }
+
+    // ---- Tier 3: project_key / ProjectEntry ------------------------------------
+
+    /// A path that does not exist cannot be canonicalized, and falls back to itself. The
+    /// key stays a consistent identity either way — worst case the user gets a second
+    /// window this would have merged.
+    #[test]
+    fn project_key_falls_back_to_the_path_as_given() {
+        let missing = "/definitely/not/a/real/path/xyzzy-12345";
+        assert_eq!(project_key(missing), PathBuf::from(missing));
+    }
+
+    /// `..` and `.` collapse for a real directory, so two spellings of one project dedupe
+    /// onto one window — the whole reason `open_project` has a key at all.
+    #[test]
+    fn project_key_collapses_two_spellings_of_one_directory() {
+        let manifest = env!("CARGO_MANIFEST_DIR"); // this crate's own dir; never the user's store
+        let via_parent = format!("{manifest}/src/..");
+        let via_dot = format!("{manifest}/./");
+
+        assert_eq!(
+            project_key(manifest),
+            project_key(&via_parent),
+            "`src/..` names the same project"
+        );
+        assert_eq!(project_key(manifest), project_key(&via_dot));
+
+        // The point: a raw string compare would have called these three different projects.
+        assert_ne!(manifest, via_parent.as_str());
+        assert_ne!(manifest, via_dot.as_str());
+    }
+
+    /// A trailing slash is not a different project.
+    #[test]
+    fn project_key_ignores_a_trailing_slash() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        assert_eq!(project_key(manifest), project_key(&format!("{manifest}/")));
+    }
+
+    /// Two genuinely different directories keep different keys.
+    #[test]
+    fn project_key_keeps_different_projects_apart() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        assert_ne!(project_key(manifest), project_key(&format!("{manifest}/src")));
+    }
+
+    /// The key is canonical and the cwd is the user's original string. Collapsing the two
+    /// fields is exactly the bug `cwd_filter_excludes` documents — the key must never be
+    /// what gets handed to grok or matched against the store.
+    #[test]
+    fn project_entry_keeps_the_original_cwd_beside_the_canonical_key() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let as_typed = format!("{manifest}/src/..");
+
+        let entry = ProjectEntry {
+            cwd: as_typed.clone(),
+            key: project_key(&as_typed),
+        };
+
+        assert_eq!(entry.cwd, as_typed, "the cwd is stored EXACTLY as picked");
+        assert_eq!(
+            entry.key,
+            project_key(manifest),
+            "the key is the canonical identity"
+        );
+        assert_ne!(
+            PathBuf::from(&entry.cwd),
+            entry.key,
+            "the two fields are different values — that is the point of having two"
+        );
+    }
+
+    // ---- Tier 3: WindowRegistry -------------------------------------------------
+
+    /// The counter is seeded at 2: `main` is the config-minted first window, so `w1` would
+    /// be gratuitously confusing.
+    #[test]
+    fn window_registry_mints_from_w2() {
+        let registry = WindowRegistry::default();
+        assert_eq!(registry.mint_label(), "w2");
+        assert_eq!(registry.mint_label(), "w3");
+        assert_eq!(registry.mint_label(), "w4");
+    }
+
+    /// Every minted label carries the prefix the capability glob matches.
+    #[test]
+    fn window_registry_labels_carry_the_prefix() {
+        let registry = WindowRegistry::default();
+        for _ in 0..20 {
+            let label = registry.mint_label();
+            assert!(
+                label.starts_with(WINDOW_LABEL_PREFIX),
+                "{label} must match the `{WINDOW_LABEL_PREFIX}*` capability glob"
+            );
+        }
+    }
+
+    /// A minted label is never `main`. `main` is the config's window and already has an
+    /// identity; minting a second one would collide on `WindowLabelAlreadyExists`.
+    #[test]
+    fn window_registry_never_mints_main() {
+        let registry = WindowRegistry::default();
+        for _ in 0..50 {
+            assert_ne!(registry.mint_label(), "main");
+        }
+    }
+
+    /// Labels are never reused. A recycled label would inherit a dead window's identity,
+    /// and `SessionKey` is built on the assumption that a label names one window for the
+    /// life of the process.
+    #[test]
+    fn window_registry_never_reuses_a_label() {
+        let registry = WindowRegistry::default();
+        let labels: Vec<String> = (0..200).map(|_| registry.mint_label()).collect();
+        let unique: HashSet<&String> = labels.iter().collect();
+        assert_eq!(unique.len(), labels.len(), "every label must be unique");
+    }
+
+    /// The counter only ever moves forward, even under concurrent minting — `open_project`
+    /// and the tray's `open_launcher` both mint, from different threads.
+    #[test]
+    fn window_registry_mints_uniquely_under_concurrency() {
+        let registry = Arc::new(WindowRegistry::default());
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let registry = registry.clone();
+                thread::spawn(move || {
+                    (0..100).map(|_| registry.mint_label()).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let mut all = Vec::new();
+        for t in threads {
+            all.extend(t.join().expect("mint thread panicked"));
+        }
+
+        let unique: HashSet<&String> = all.iter().collect();
+        assert_eq!(all.len(), 800);
+        assert_eq!(
+            unique.len(),
+            800,
+            "two windows must never be handed the same label"
+        );
+    }
+
+    /// Insert / lookup / remove, keyed by label. `window_project` reads this map and
+    /// `Destroyed` removes from it.
+    #[test]
+    fn window_registry_insert_lookup_remove() {
+        let registry = WindowRegistry::default();
+        let cwd = "/tmp/projB".to_string();
+
+        {
+            let mut guard = registry.inner.lock().unwrap();
+            guard.insert(
+                "w2".to_string(),
+                ProjectEntry {
+                    cwd: cwd.clone(),
+                    key: PathBuf::from(&cwd),
+                },
+            );
+        }
+
+        {
+            let guard = registry.inner.lock().unwrap();
+            assert_eq!(guard.get("w2").map(|e| e.cwd.clone()), Some(cwd));
+            assert!(guard.get("w3").is_none(), "an unknown window has no project");
+        }
+
+        {
+            let mut guard = registry.inner.lock().unwrap();
+            assert!(guard.remove("w2").is_some());
+            assert!(guard.remove("w2").is_none(), "removing twice is a no-op");
+            assert!(guard.is_empty());
+        }
+    }
+
+    /// A fresh registry is empty — every window starts projectless and `window_project`
+    /// answers `None` until `open_project` inserts. That `None` is what renders the
+    /// launcher.
+    #[test]
+    fn window_registry_starts_empty() {
+        let registry = WindowRegistry::default();
+        assert!(registry.inner.lock().unwrap().is_empty());
+    }
+
+    /// The reverse lookup `open_project` does inside its critical section: find the window
+    /// already showing this canonical key. Two windows on two projects, one match.
+    #[test]
+    fn window_registry_finds_the_window_showing_a_project() {
+        let registry = WindowRegistry::default();
+        {
+            let mut guard = registry.inner.lock().unwrap();
+            for (label, cwd) in [("main", "/tmp/projA"), ("w2", "/tmp/projB")] {
+                guard.insert(
+                    label.to_string(),
+                    ProjectEntry {
+                        cwd: cwd.to_string(),
+                        key: PathBuf::from(cwd),
+                    },
+                );
+            }
+        }
+
+        let guard = registry.inner.lock().unwrap();
+        let found = guard
+            .iter()
+            .find(|(_, entry)| entry.key == Path::new("/tmp/projB"))
+            .map(|(label, _)| label.clone());
+        assert_eq!(found, Some("w2".to_string()));
+
+        let missing = guard
+            .iter()
+            .find(|(_, entry)| entry.key == Path::new("/tmp/projC"));
+        assert!(missing.is_none(), "an unopened project has no window");
+    }
+
+    // ---- Tier 3: the capability glob (fails SILENTLY in release builds) --------
+
+    /// `capabilities/default.json`'s `"windows"` glob is what grants a window the right to
+    /// invoke anything at all. A label it fails to match loses ALL IPC — with no error and
+    /// no log in a release build; the window simply never works. Nothing else in the build
+    /// checks these two against each other, so this test is the only thing standing
+    /// between the constant and the glob.
+    #[test]
+    fn capability_glob_matches_the_window_label_prefix() {
+        const CAPABILITY: &str = include_str!("../capabilities/default.json");
+        let parsed: Value = serde_json::from_str(CAPABILITY).expect("capability file must be JSON");
+
+        let windows: Vec<&str> = parsed["windows"]
+            .as_array()
+            .expect("`windows` must be an array")
+            .iter()
+            .map(|w| w.as_str().expect("every entry must be a string"))
+            .collect();
+
+        assert!(
+            windows.contains(&"main"),
+            "the config-minted `main` window must be covered: {windows:?}"
+        );
+
+        let glob = windows
+            .iter()
+            .find(|w| w.ends_with('*'))
+            .unwrap_or_else(|| panic!("no prefix glob for minted windows in {windows:?}"));
+        assert_eq!(
+            glob.trim_end_matches('*'),
+            WINDOW_LABEL_PREFIX,
+            "the capability glob and WINDOW_LABEL_PREFIX have drifted — every minted \
+             window would silently lose IPC in a release build"
+        );
+    }
+
+    /// The glob is a PREFIX glob, not a bare `*`. `["*"]` would grant every future window
+    /// every permission by default, which is the thing the named prefix exists to avoid.
+    #[test]
+    fn capability_glob_is_not_a_bare_wildcard() {
+        const CAPABILITY: &str = include_str!("../capabilities/default.json");
+        let parsed: Value = serde_json::from_str(CAPABILITY).unwrap();
+        let windows = parsed["windows"].as_array().unwrap();
+        assert!(
+            !windows.iter().any(|w| w == "*"),
+            "a bare `*` would auto-grant every future window"
+        );
+    }
+
+    /// Labels the registry actually mints are matched by the glob the capability declares.
+    /// The two tests above check the strings; this one checks the property they exist for.
+    #[test]
+    fn every_minted_label_is_covered_by_the_capability_glob() {
+        const CAPABILITY: &str = include_str!("../capabilities/default.json");
+        let parsed: Value = serde_json::from_str(CAPABILITY).unwrap();
+        let globs: Vec<String> = parsed["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w.as_str().unwrap().to_string())
+            .collect();
+
+        let covered = |label: &str| {
+            globs.iter().any(|g| match g.strip_suffix('*') {
+                Some(prefix) => label.starts_with(prefix),
+                None => g == label,
+            })
+        };
+
+        assert!(covered("main"), "the launcher window must be covered");
+        let registry = WindowRegistry::default();
+        for _ in 0..50 {
+            let label = registry.mint_label();
+            assert!(covered(&label), "{label} is not covered by {globs:?}");
+        }
+    }
+
+    // ---- Tier 3: the hook allowlist (drift here means grok edits files unasked) --
+
+    /// The sh hook's `case` arm and `READONLY_TOOLS` must be the same list, in the same
+    /// order. They are two hand-maintained copies of one allowlist: the script's is what
+    /// actually auto-allows, and Rust's is the defence-in-depth check in the watcher.
+    /// Drift in one direction prompts for a read (annoying); in the other it silently
+    /// auto-allows something that should have been asked about.
+    #[test]
+    fn hook_script_allowlist_matches_readonly_tools() {
+        let after = HOOK_SCRIPT
+            .split_once("case \"$TOOL\" in")
+            .expect("the hook script must still have a $TOOL case")
+            .1;
+        let arm = after
+            .split_once(')')
+            .expect("the case arm must be closed")
+            .0
+            .trim();
+        let tools: Vec<&str> = arm.split('|').map(str::trim).collect();
+
+        assert_eq!(
+            tools, READONLY_TOOLS,
+            "the sh hook's allowlist has drifted from READONLY_TOOLS"
+        );
+    }
+
+    /// The PowerShell hook carries a third copy of the same list. Only compiled on
+    /// Windows, so this does not run on a macOS/Linux gate — noted, not hidden.
+    #[cfg(windows)]
+    #[test]
+    fn hook_script_ps1_allowlist_matches_readonly_tools() {
+        let after = HOOK_SCRIPT_PS1
+            .split_once("$allow = @(")
+            .expect("the ps1 hook must still declare $allow")
+            .1;
+        let arm = after.split_once(')').expect("$allow must be closed").0;
+        let tools: Vec<String> = arm
+            .split(',')
+            .map(|t| t.trim().trim_matches('"').to_string())
+            .collect();
+
+        assert_eq!(
+            tools, READONLY_TOOLS,
+            "the ps1 hook's allowlist has drifted from READONLY_TOOLS"
+        );
+    }
+
+    /// **The allowlist must never grow a mutating tool.** This is the entire safety
+    /// argument of the gate: a denylist does not hold (grok routes around it via
+    /// `monitor`), so the default-deny allowlist is the only thing that does. Any of these
+    /// appearing here means grok writes files, runs shells, or spawns background work with
+    /// no prompt at all.
+    #[test]
+    fn readonly_tools_contains_nothing_that_mutates() {
+        for tool in [
+            "write",
+            "create_file",
+            "search_replace",
+            "run_terminal_command",
+            "monitor",
+            "delete_file",
+            "edit_file",
+        ] {
+            assert!(
+                !READONLY_TOOLS.contains(&tool),
+                "`{tool}` mutates and must NEVER be auto-allowed"
+            );
+        }
+    }
+
+    /// Network egress is deliberately NOT auto-allowed, so a read-then-exfiltrate path
+    /// cannot run unattended. This exclusion is a decision, not an omission.
+    #[test]
+    fn readonly_tools_excludes_network_egress() {
+        for tool in ["web_search", "web_fetch", "browse", "fetch"] {
+            assert!(
+                !READONLY_TOOLS.contains(&tool),
+                "`{tool}` reaches the network and must prompt"
+            );
+        }
+    }
+
+    /// The allowlist is non-empty and has no duplicates — a duplicate would mean an edit
+    /// half-applied to one of the three copies.
+    #[test]
+    fn readonly_tools_is_a_clean_set() {
+        assert!(!READONLY_TOOLS.is_empty());
+        let unique: HashSet<&&str> = READONLY_TOOLS.iter().collect();
+        assert_eq!(unique.len(), READONLY_TOOLS.len(), "duplicate entry");
+        assert!(!READONLY_TOOLS.iter().any(|t| t.is_empty()));
+    }
+
+    /// The hook FAILS CLOSED: after its internal deadline it prints an explicit deny
+    /// rather than being force-killed by grok's 600s timeout (which would fail open).
+    #[test]
+    fn hook_script_denies_on_timeout() {
+        assert!(
+            HOOK_SCRIPT.contains(r#"{"decision":"deny""#),
+            "the sh hook must emit an explicit deny after its deadline"
+        );
+        // The internal deadline must stay under grok's 600s hook timeout: 5000 * 0.1s.
+        assert!(HOOK_SCRIPT.contains("-lt 5000"));
+        assert!(HOOK_SCRIPT.contains("sleep 0.1"));
+    }
+
+    /// The hook only gates sessions the app has marked live, so the user's own terminal
+    /// grok is never gated by an app that isn't even watching it.
+    #[test]
+    fn hook_script_gates_only_live_sessions() {
+        assert!(
+            HOOK_SCRIPT.contains("$BRIDGE/live/$SID"),
+            "the live-marker gate is what keeps a terminal grok ungated"
+        );
+    }
+
+    /// The hook reads its scalar fields from the payload prefix BEFORE `toolInput`, so
+    /// model-controlled content inside `toolInput` (a file's bytes, a command string)
+    /// cannot spoof `toolName` or `sessionId` — e.g. writing a file whose contents contain
+    /// `"toolName":"read_file"`.
+    #[test]
+    fn hook_script_truncates_before_tool_input() {
+        assert!(
+            HOOK_SCRIPT.contains(r#"HEAD=${INPUT%%\"toolInput\"*}"#),
+            "the anti-spoof truncation is gone from the sh hook"
+        );
+    }
+
+    /// The bridge path is hardcoded in the hook script and computed in Rust. Two spellings
+    /// of one directory; if they drift, the app writes decisions nobody reads and every
+    /// approval times out into a deny.
+    #[test]
+    fn bridge_root_agrees_with_the_hook_script() {
+        assert!(
+            HOOK_SCRIPT.contains(r#"BRIDGE="$HOME/.grok/gbd-bridge""#),
+            "the sh hook's bridge path has moved"
+        );
+        if let Some(root) = bridge_root() {
+            assert!(
+                root.ends_with(".grok/gbd-bridge"),
+                "bridge_root disagrees with the hook script: {root:?}"
+            );
+        }
+    }
+
+    // ---- build_permission_payload ---------------------------------------------
+
+    /// An edit renders as a diff, titled with the file's basename.
+    #[test]
+    fn permission_payload_renders_an_edit_as_a_diff() {
+        let req = json!({
+            "toolName": "search_replace",
+            "toolInput": {
+                "file_path": "/tmp/projB/src/main.rs",
+                "old_string": "let x = 1;",
+                "new_string": "let x = 2;"
+            }
+        });
+        let payload = build_permission_payload(&req, "tuid-1");
+
+        assert_eq!(payload["toolCall"]["title"], json!("Edit main.rs"));
+        assert_eq!(payload["toolCall"]["content"][0]["type"], json!("diff"));
+        assert_eq!(
+            payload["toolCall"]["content"][0]["path"],
+            json!("/tmp/projB/src/main.rs")
+        );
+        assert_eq!(payload["toolCall"]["content"][0]["oldText"], json!("let x = 1;"));
+        assert_eq!(payload["toolCall"]["content"][0]["newText"], json!("let x = 2;"));
+    }
+
+    /// A new file is a diff against nothing — `oldText` is empty, which is what makes the
+    /// card render as an all-additions diff rather than a rewrite.
+    #[test]
+    fn permission_payload_renders_a_write_as_a_diff_from_empty() {
+        for tool in ["write", "create_file"] {
+            let req = json!({
+                "toolName": tool,
+                "toolInput": {"file_path": "/tmp/projB/new.txt", "content": "hello"}
+            });
+            let payload = build_permission_payload(&req, "tuid-1");
+
+            assert_eq!(payload["toolCall"]["title"], json!("Write new.txt"), "{tool}");
+            assert_eq!(payload["toolCall"]["content"][0]["type"], json!("diff"));
+            assert_eq!(payload["toolCall"]["content"][0]["oldText"], json!(""));
+            assert_eq!(payload["toolCall"]["content"][0]["newText"], json!("hello"));
+        }
+    }
+
+    /// A shell command renders verbatim. `monitor` is grok's undocumented background
+    /// shell — the tool it routes around a denylist with — and must render exactly like a
+    /// foreground one, because it is exactly as dangerous.
+    #[test]
+    fn permission_payload_renders_a_command() {
+        for tool in ["run_terminal_command", "monitor"] {
+            let req = json!({
+                "toolName": tool,
+                "toolInput": {"command": "rm -rf /tmp/projB"}
+            });
+            let payload = build_permission_payload(&req, "tuid-1");
+
+            assert_eq!(payload["toolCall"]["title"], json!("Run a shell command"), "{tool}");
+            assert_eq!(payload["toolCall"]["content"][0]["type"], json!("command"));
+            assert_eq!(
+                payload["toolCall"]["content"][0]["text"],
+                json!("rm -rf /tmp/projB"),
+                "the command must be shown exactly as it will run"
+            );
+        }
+    }
+
+    /// An unrecognised tool still gets a card, naming the tool and dumping its input. It
+    /// must never be silently allowed just because we have no pretty renderer for it.
+    #[test]
+    fn permission_payload_falls_back_for_an_unknown_tool() {
+        let req = json!({
+            "toolName": "web_fetch",
+            "toolInput": {"url": "https://example.com"}
+        });
+        let payload = build_permission_payload(&req, "tuid-1");
+
+        assert_eq!(
+            payload["toolCall"]["title"],
+            json!("Grok wants to use web_fetch")
+        );
+        assert_eq!(payload["toolCall"]["content"][0]["type"], json!("command"));
+        let text = payload["toolCall"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("https://example.com"), "the input must be shown: {text}");
+    }
+
+    /// `hookToolUseId` is the request FILE'S STEM, which is the id the hook script polls
+    /// its response on. It must be the `tuid` argument and never the JSON `toolUseId` —
+    /// the two differ whenever grok omits the field, and answering the wrong one leaves
+    /// the hook waiting out its full deadline into an auto-deny.
+    #[test]
+    fn permission_payload_keys_on_the_file_stem_not_the_json_field() {
+        let req = json!({
+            "toolName": "write",
+            "toolUseId": "a-different-id-from-the-json",
+            "toolInput": {"file_path": "/tmp/x", "content": "y"}
+        });
+        let payload = build_permission_payload(&req, "the-file-stem");
+
+        assert_eq!(
+            payload["hookToolUseId"],
+            json!("the-file-stem"),
+            "the stem is the identity the hook polls on"
+        );
+    }
+
+    /// The card always offers exactly Allow and Deny, with the option ids the frontend
+    /// sends back and the kinds it styles on.
+    #[test]
+    fn permission_payload_always_offers_allow_and_deny() {
+        let req = json!({"toolName": "write", "toolInput": {"file_path": "/tmp/x"}});
+        let payload = build_permission_payload(&req, "tuid-1");
+
+        assert_eq!(
+            payload["options"],
+            json!([
+                {"optionId": "allow", "name": "Allow", "kind": "allow"},
+                {"optionId": "deny",  "name": "Deny",  "kind": "reject"}
+            ]),
+            "the two-option contract is what PermissionCard renders"
+        );
+        assert_eq!(payload["requestId"], json!(0));
+    }
+
+    /// A missing `toolInput` must not panic — the payload is a foreign process's JSON, and
+    /// a card with empty fields beats a crashed watcher thread.
+    #[test]
+    fn permission_payload_survives_a_missing_tool_input() {
+        let payload = build_permission_payload(&json!({"toolName": "search_replace"}), "t");
+        assert_eq!(payload["toolCall"]["title"], json!("Edit "));
+        assert_eq!(payload["toolCall"]["content"][0]["path"], json!(""));
+    }
+
+    /// A missing `toolName` falls to the unknown-tool arm rather than matching an empty
+    /// string into a renderer.
+    #[test]
+    fn permission_payload_survives_a_missing_tool_name() {
+        let payload = build_permission_payload(&json!({"toolInput": {}}), "t");
+        assert_eq!(payload["toolCall"]["title"], json!("Grok wants to use "));
+    }
+
+    /// Non-string fields are not strings, and `s()` says so rather than stringifying them.
+    /// grok's `toolInput` is not a type we control.
+    #[test]
+    fn permission_payload_survives_wrongly_typed_input_fields() {
+        let req = json!({
+            "toolName": "search_replace",
+            "toolInput": {"file_path": 42, "old_string": null, "new_string": ["a"]}
+        });
+        let payload = build_permission_payload(&req, "t");
+        assert_eq!(payload["toolCall"]["content"][0]["path"], json!(""));
+        assert_eq!(payload["toolCall"]["content"][0]["oldText"], json!(""));
+        assert_eq!(payload["toolCall"]["content"][0]["newText"], json!(""));
+    }
+
+    /// The payload carries NO identity of its own — `tabId` is stamped by
+    /// `SessionKey::emit` on the way out. A second writer of `tabId` is how the two drift.
+    #[test]
+    fn permission_payload_carries_no_tab_id() {
+        let req = json!({"toolName": "write", "toolInput": {"file_path": "/tmp/x"}});
+        let payload = build_permission_payload(&req, "tuid-1");
+        assert!(
+            payload.get("tabId").is_none(),
+            "build_permission_payload must not stamp tabId; emit() is the only writer"
+        );
+    }
+
+    /// End to end through the one route a card takes: build, then stamp. The frontend
+    /// needs both `tabId` (which tab drew it) and `hookToolUseId` (what to answer).
+    #[test]
+    fn permission_payload_gains_its_tab_id_only_via_with_tab_id() {
+        let req = json!({"toolName": "write", "toolInput": {"file_path": "/tmp/x", "content": ""}});
+        let routed = with_tab_id(build_permission_payload(&req, "tuid-1"), "3");
+
+        assert_eq!(routed["tabId"], json!("3"));
+        assert_eq!(routed["hookToolUseId"], json!("tuid-1"));
+    }
+
+    // ---- is_auth_error ----------------------------------------------------------
+
+    /// The three shapes grok's auth failures actually take. Getting this wrong means the
+    /// UI reports a hard failure where it should be showing a sign-in button.
+    #[test]
+    fn is_auth_error_recognises_grok_auth_failures() {
+        assert!(is_auth_error("Authentication required"));
+        assert!(is_auth_error("authentication required"));
+        assert!(is_auth_error("AUTHENTICATION REQUIRED"));
+        assert!(is_auth_error("No auth method available"));
+        assert!(is_auth_error("Unauthorized"));
+        assert!(is_auth_error("401 unauthorized"));
+    }
+
+    /// The match is a case-insensitive substring, so a wrapped or prefixed message still
+    /// reads as auth — the string comes from grok and its wording is not our contract.
+    #[test]
+    fn is_auth_error_matches_inside_a_longer_message() {
+        assert!(is_auth_error(
+            "session/new failed: Authentication required (code -32000)"
+        ));
+    }
+
+    /// Everything else is a real error and must NOT be reported as needing sign-in — that
+    /// would send the user to a browser to fix a timeout.
+    #[test]
+    fn is_auth_error_rejects_non_auth_failures() {
+        for msg in [
+            "",
+            "grok didn't answer `session/new` in time",
+            "grok stopped responding",
+            "Permission denied",
+            "no such file or directory",
+            "Couldn't start `grok agent stdio`",
+        ] {
+            assert!(!is_auth_error(msg), "{msg:?} is not an auth error");
+        }
+    }
+
+    // ---- absolutize / resolve_project ------------------------------------------
+
+    /// An absolute path passes through unchanged — and, critically, unresolved.
+    #[cfg(desktop)]
+    #[test]
+    fn absolutize_passes_an_absolute_path_through() {
+        assert_eq!(absolutize("/tmp/projB"), Some(PathBuf::from("/tmp/projB")));
+        assert_eq!(absolutize("/"), Some(PathBuf::from("/")));
+    }
+
+    /// `.` and `..` are popped lexically — what the user typed and what their shell showed
+    /// them, rather than what the kernel would resolve across a symlink.
+    #[cfg(desktop)]
+    #[test]
+    fn absolutize_pops_dot_and_dotdot_lexically() {
+        assert_eq!(absolutize("/tmp/./projB"), Some(PathBuf::from("/tmp/projB")));
+        assert_eq!(absolutize("/tmp/a/../projB"), Some(PathBuf::from("/tmp/projB")));
+        assert_eq!(
+            absolutize("/tmp/a/b/../../projB"),
+            Some(PathBuf::from("/tmp/projB"))
+        );
+        assert_eq!(absolutize("/tmp/projB/"), Some(PathBuf::from("/tmp/projB")));
+    }
+
+    /// A relative path is joined onto the current directory. This is what makes
+    /// `<app> .` and `<app> ../projB` work from a terminal.
+    #[cfg(desktop)]
+    #[test]
+    fn absolutize_joins_a_relative_path_onto_the_cwd() {
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(absolutize("projB"), Some(cwd.join("projB")));
+        assert_eq!(absolutize("."), Some(cwd.clone()));
+        assert_eq!(absolutize("./projB"), Some(cwd.join("projB")));
+    }
+
+    /// **The symlink trap, pinned at the source.** `absolutize` must NOT resolve symlinks:
+    /// macOS canonicalizes `/tmp` to `/private/tmp`, while the CLI stored those sessions
+    /// under `/tmp`. Resolving here would hand `list_sessions_inner` a path that can never
+    /// match, and the sidebar would silently empty. `/tmp` exists on every macOS box and
+    /// is not the user's session store.
+    #[cfg(all(desktop, target_os = "macos"))]
+    #[test]
+    fn absolutize_does_not_resolve_symlinks_on_macos() {
+        assert_eq!(
+            absolutize("/tmp/projB"),
+            Some(PathBuf::from("/tmp/projB")),
+            "absolutize must keep the path the user meant"
+        );
+        // The contrast that makes the test worth having: canonicalize would NOT.
+        assert_eq!(
+            std::fs::canonicalize("/tmp").unwrap(),
+            PathBuf::from("/private/tmp"),
+            "if this ever stops being true, the trap this guards against is gone"
+        );
+    }
+
+    /// A real directory resolves to itself, and the string handed back is the
+    /// lexically-absolute path — never `canonicalize`'s output.
+    #[cfg(desktop)]
+    #[test]
+    fn resolve_project_accepts_a_real_directory() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        assert_eq!(resolve_project(manifest), Ok(manifest.to_string()));
+    }
+
+    /// `..` is collapsed on the way through, so two spellings of one project produce one
+    /// cwd string.
+    #[cfg(desktop)]
+    #[test]
+    fn resolve_project_collapses_dotdot() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        assert_eq!(
+            resolve_project(&format!("{manifest}/src/..")),
+            Ok(manifest.to_string())
+        );
+    }
+
+    /// **The whole point of `resolve_project` NOT returning `canonicalize`'s output**, on
+    /// the platform where it bites: `<app> .` from `/tmp/projB` must open `/tmp/projB`,
+    /// not `/private/tmp/projB`.
+    #[cfg(all(desktop, target_os = "macos"))]
+    #[test]
+    fn resolve_project_keeps_the_unresolved_path_on_macos() {
+        assert_eq!(
+            resolve_project("/tmp"),
+            Ok("/tmp".to_string()),
+            "canonicalize proves existence and is then DISCARDED — do not return it"
+        );
+    }
+
+    /// A path that does not exist is an error, not a window on nothing. Argv is untrusted
+    /// and this is the only gate between it and `open_project`.
+    #[cfg(desktop)]
+    #[test]
+    fn resolve_project_rejects_a_missing_path() {
+        let err = resolve_project("/definitely/not/a/real/path/xyzzy-12345").unwrap_err();
+        assert!(err.contains("xyzzy-12345"), "the error must name the input: {err}");
+    }
+
+    /// A file is not a folder. `canonicalize` succeeds on one, so the `is_dir` check is
+    /// what refuses it.
+    #[cfg(desktop)]
+    #[test]
+    fn resolve_project_rejects_a_file() {
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let err = resolve_project(&format!("{manifest}/Cargo.toml")).unwrap_err();
+        assert!(err.contains("isn't a folder"), "unexpected error: {err}");
+    }
+
+    /// No args resolves to the launcher without touching the disk.
+    #[cfg(desktop)]
+    #[test]
+    fn resolve_cli_no_args_is_the_launcher() {
+        assert!(matches!(
+            resolve_cli(Vec::<String>::new()),
+            Ok(CliIntent::Launcher)
+        ));
+    }
+
+    /// A real path resolves to a project. (The `--resume` arm is deliberately NOT tested:
+    /// it walks the user's real `~/.grok/sessions` store.)
+    #[cfg(desktop)]
+    #[test]
+    fn resolve_cli_a_real_path_is_a_project() {
+        let manifest = env!("CARGO_MANIFEST_DIR").to_string();
+        match resolve_cli(vec![manifest.clone()]) {
+            Ok(CliIntent::Project(cwd)) => assert_eq!(cwd, manifest),
+            _ => panic!("expected a Project intent"),
+        }
+    }
+
+    /// A parse error surfaces before any disk access, so a bad flag never costs a scan.
+    #[cfg(desktop)]
+    #[test]
+    fn resolve_cli_propagates_a_parse_error() {
+        assert!(resolve_cli(vec!["--resume".to_string()]).is_err());
+    }
+
+    /// A bad path is an error the caller falls back to the launcher on, rather than a
+    /// half-open window.
+    #[cfg(desktop)]
+    #[test]
+    fn resolve_cli_propagates_a_bad_path() {
+        assert!(resolve_cli(vec!["/definitely/not/real/xyzzy-12345".to_string()]).is_err());
+    }
+
+    /// Ignored flags survive the whole pipeline, not just the parser. This is the Finder
+    /// launch, end to end.
+    #[cfg(desktop)]
+    #[test]
+    fn resolve_cli_ignores_a_process_serial_number() {
+        assert!(matches!(
+            resolve_cli(vec!["-psn_0_12345".to_string()]),
+            Ok(CliIntent::Launcher)
+        ));
+    }
+
+    // ---- wire contracts (the frontend reads these field names) ------------------
+
+    /// `OpenOutcome`'s field names and its three `kind` values are the frontend's
+    /// contract (src/lib/bridge.ts): only `"adopted"` makes the caller re-render.
+    #[test]
+    fn open_outcome_serializes_the_shape_the_frontend_reads() {
+        for kind in ["focused", "adopted", "opened"] {
+            let json = serde_json::to_value(OpenOutcome {
+                kind,
+                label: "w2".to_string(),
+            })
+            .unwrap();
+            assert_eq!(json, json!({"kind": kind, "label": "w2"}));
+        }
+    }
+
+    /// `AuthStatus`'s `Default` is the JoinError fallback: if the probe thread dies we
+    /// report "not installed, not signed in" rather than inventing state. Reporting
+    /// `true` here would send the user to a chat with no agent behind it.
+    #[test]
+    fn auth_status_default_claims_nothing() {
+        let json = serde_json::to_value(AuthStatus::default()).unwrap();
+        assert_eq!(
+            json,
+            json!({"grok_installed": false, "grok_path": null, "has_login": false})
+        );
+    }
+
+    /// `SessionMeta`'s snake_case field names are what the sidebar reads.
+    #[test]
+    fn session_meta_serializes_the_shape_the_frontend_reads() {
+        let json = serde_json::to_value(SessionMeta {
+            id: "id-1".to_string(),
+            title: "A title".to_string(),
+            summary: "A summary".to_string(),
+            cwd: "/tmp/projB".to_string(),
+            created_at: "2026-01-01".to_string(),
+            updated_at: "2026-01-02".to_string(),
+            num_messages: 7,
+        })
+        .unwrap();
+
+        assert_eq!(
+            json,
+            json!({
+                "id": "id-1", "title": "A title", "summary": "A summary",
+                "cwd": "/tmp/projB", "created_at": "2026-01-01",
+                "updated_at": "2026-01-02", "num_messages": 7
+            })
+        );
+    }
+
+    /// `Project`'s field names are what the recents list reads.
+    #[test]
+    fn project_serializes_the_shape_the_frontend_reads() {
+        let json = serde_json::to_value(Project {
+            path: "/tmp/projB".to_string(),
+            name: "projB".to_string(),
+            last_used: 1_700_000_000,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            json!({"path": "/tmp/projB", "name": "projB", "last_used": 1_700_000_000})
+        );
+    }
+
+    /// `ConnectResult` is what `connect` resolves with; `needs_auth` is the flag the UI
+    /// branches on between "chat" and "sign in".
+    #[test]
+    fn connect_result_serializes_the_shape_the_frontend_reads() {
+        let json = serde_json::to_value(ConnectResult {
+            needs_auth: true,
+            auth_methods: vec![json!({"id": "grok.com"})],
+            session_id: None,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            json!({
+                "needs_auth": true,
+                "auth_methods": [{"id": "grok.com"}],
+                "session_id": null
+            })
         );
     }
 }
