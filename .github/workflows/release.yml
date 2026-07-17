@@ -177,6 +177,48 @@ jobs:
           includeUpdaterJson: true
           args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
 
+      # tauri notarizes and staples the .app, then builds a .dmg AROUND it and only
+      # SIGNS that — the .dmg itself is never notarized. But the .dmg is what users
+      # download and double-click first, and Gatekeeper checks it: an un-notarized
+      # one is rejected with "cannot be opened because Apple cannot check it for
+      # malicious software", even though the app inside is fine. Verified on v0.8.2:
+      #   spctl -a -t open --context context:primary-signature <dmg>
+      #     -> rejected, source=Unnotarized Developer ID
+      # So notarize + staple the .dmg too, then replace the asset tauri already
+      # uploaded. Stapling matters: without it the ticket is only fetchable online,
+      # so an offline first-open would still fail.
+      - name: Notarize and staple the macOS .dmg
+        if: startsWith(matrix.platform, 'macos') && env.APPLE_CERTIFICATE != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          dmg="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/dmg" \
+            -maxdepth 1 -name '*.dmg' -print -quit)"
+          if [ -z "$dmg" ]; then
+            echo "No .dmg found to notarize — the bundle layout changed." >&2
+            exit 1
+          fi
+          echo "Notarizing $dmg"
+
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          xcrun stapler staple "$dmg"
+
+          # Prove it before shipping: a stapled ticket must validate offline, and
+          # Gatekeeper must accept the DMG itself — not just the app inside.
+          xcrun stapler validate "$dmg"
+          spctl -a -vvv -t open --context context:primary-signature "$dmg"
+
+          # Replace the un-notarized copy tauri-action already attached.
+          gh release upload "${GITHUB_REF_NAME}" "$dmg" --clobber --repo "${GITHUB_REPOSITORY}"
+
   publish:
     name: Publish complete release
     needs: build

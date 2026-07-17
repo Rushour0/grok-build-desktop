@@ -101,10 +101,41 @@ security import DeveloperIDG2CA.cer -k ~/Library/Keychains/login.keychain-db
 | `APPLE_PASSWORD` | the app-specific password (step 3) |
 | `APPLE_TEAM_ID` | your Team ID |
 
-That's it. `release.yml` already has a **dormant** signing step: it turns on
-automatically the moment `APPLE_CERTIFICATE` exists, and stays a no-op (unsigned
-build) until then. The next tag you push will produce a **signed + notarized** app
-that opens on double-click with no warning and no `xattr`.
+That's it. The signing step in `release.yml` turns on automatically the moment
+`APPLE_CERTIFICATE` exists, and stays a no-op (unsigned build) until then.
+
+## Why the .dmg is notarized in a separate CI step
+
+**Don't delete the "Notarize and staple the macOS .dmg" step in `release.yml`.** It
+looks redundant next to Tauri's own notarization. It isn't.
+
+Tauri notarizes and staples the **`.app`**, then builds a `.dmg` *around* it and
+only **signs** that. The `.dmg` itself is never notarized — and the `.dmg` is what
+users download and double-click first. Gatekeeper checks it. This shipped in v0.8.2
+and the artifact was rejected:
+
+```sh
+spctl -a -vvv -t open --context context:primary-signature Grok.Build.Desktop_0.8.2_x64.dmg
+# Grok.Build.Desktop_0.8.2_x64.dmg: rejected
+# source=Unnotarized Developer ID
+```
+
+The app inside was `accepted / source=Notarized Developer ID` the whole time — which
+is exactly what makes this easy to miss. A green CI run and an `Accepted` line in the
+Tauri log are both true and both about the `.app`.
+
+Two things worth knowing if you ever debug this:
+
+- **Notarization tickets are keyed to a file's content hash and served from Apple.**
+  Submitting a byte-identical copy of a file notarizes the original too, since they
+  hash the same. That makes `spctl` results non-reproducible if you've been testing
+  with copies — a file can flip from `rejected` to `accepted` with no local change.
+- **Stapling is what makes it work offline.** Without `xcrun stapler staple`, the
+  ticket is only fetchable over the network, so a first open with no connectivity
+  still fails. Always `stapler validate` to confirm.
+
+The CI step notarizes, staples, verifies with both `stapler validate` and `spctl`,
+and then re-uploads the `.dmg` to replace the copy `tauri-action` already attached.
 
 ## Signing a build locally (optional)
 
