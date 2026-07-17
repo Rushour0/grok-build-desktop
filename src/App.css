@@ -373,6 +373,15 @@ button.side-row.active strong {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.content-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.35rem;
+}
+.content-actions .primary {
+  white-space: nowrap;
+}
 button.transcript-close {
   width: 2rem;
   height: 2rem;

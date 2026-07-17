@@ -1,11 +1,15 @@
 [package]
 name = "grok-build-desktop"
-version = "0.8.4"
+version = "0.8.5"
 description = "A clean desktop GUI for Grok Build — no terminal required."
 authors = ["Grok Build Desktop contributors"]
 license = "Apache-2.0"
 repository = "https://github.com/Rushour0/grok-build-desktop"
 edition = "2021"
+# `HashMap::extract_if` (see `take_window` in src/lib.rs) stabilized in 1.88. It is the
+# only way to move owned Sessions out of the state map — `retain` can't — and killing a
+# Session must happen with the state lock released.
+rust-version = "1.88"
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary

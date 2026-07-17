@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -9,15 +9,20 @@ import {
   installGrok,
   recentProjects,
   listSessions,
-  loadSessionUpdates,
   searchSessions,
   connect,
   authenticate,
   openSession,
+  loadSession,
   sendPrompt,
   cancelRun,
   respondPermission,
   respondHook,
+  openProject,
+  windowProject,
+  pendingResume,
+  busySessions,
+  shutdownAll,
   subscribe,
   type AuthMethod,
   type PermissionRequest,
@@ -27,7 +32,13 @@ import {
 } from "./lib/bridge";
 import "./App.css";
 
-// Installation is global; folders, authentication, and conversations live in tabs.
+// Installation is global. A *window* owns one project folder (Rust decides which,
+// via `open_project`; we learn it by asking `window_project`), and each tab inside
+// that window is one conversation in that folder.
+//
+// `ready` means "this window has no project yet" — the launcher. `chat` means it
+// has one. The two are kept in lockstep with `projectCwd`, which is what the
+// render actually branches on, so a stage that drifts can't make the UI lie.
 type Stage = "checking" | "needs-install" | "installing" | "ready" | "chat";
 
 interface ToolItem {
@@ -45,7 +56,12 @@ interface AskItem {
   id: string;
   kind: "ask";
   req: PermissionRequest;
+  /// The option the user picked, set only once Rust has *accepted* the answer.
   decided: string | null;
+  /// Why the answer didn't land. Rust rejects a decision for a request this window
+  /// doesn't own, so "you clicked it" and "it counted" are no longer the same
+  /// thing and must not render the same way.
+  failed: string | null;
 }
 interface PlanItem {
   id: string;
@@ -73,8 +89,18 @@ type AuthPending = "contacting" | "browser" | "opening" | null;
 
 interface Tab {
   id: string;
-  cwd: string | null;
+  /// Always the owning window's project. A tab can no longer lack one: you reach
+  /// a tab strip only through a window that already has a folder.
+  cwd: string;
   sessionId: string | null;
+  /// The conversation this tab is *becoming*, from the click until `loadSession`
+  /// resolves. Without it a second click during that gap finds no tab carrying
+  /// the session id yet and opens a duplicate of the conversation already loading.
+  loadingSessionId: string | null;
+  /// The conversation's own title, once we've opened a stored one. `null` is an
+  /// unsaved new chat — every tab in a window shares the folder, so the folder
+  /// name would name them all the same thing.
+  title: string | null;
   items: Item[];
   busy: boolean;
   draft: string;
@@ -99,11 +125,13 @@ interface Tab {
 let nextTabId = 1;
 let nextItemId = 1;
 
-function createTab(): Tab {
+function createTab(cwd: string): Tab {
   return {
     id: `tab-${nextTabId++}`,
-    cwd: null,
+    cwd,
     sessionId: null,
+    loadingSessionId: null,
+    title: null,
     items: [],
     busy: false,
     draft: "",
@@ -274,6 +302,10 @@ function authLine(tab: Tab): string | null {
   return null;
 }
 
+/// All `openConversation` needs to open one. `SessionMeta` satisfies it; so does the
+/// `--resume` path, which knows the id and the folder but may not have the title.
+type ConversationRef = Pick<SessionMeta, "id" | "cwd" | "title">;
+
 function sessionDate(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
@@ -281,30 +313,36 @@ function sessionDate(value: string): string {
 
 export default function App() {
   const [stage, setStage] = useState<Stage>("checking");
+  /// This window's project, straight from Rust. `null` is a launcher window.
+  const [projectCwd, setProjectCwd] = useState<string | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [recents, setRecents] = useState<Project[]>([]);
+  /// An `open_project` is in flight. Decoration for the launcher's wait, nothing
+  /// more — the promise still owns the outcome.
+  const [openingProject, setOpeningProject] = useState(false);
   const [historySessions, setHistorySessions] = useState<SessionMeta[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historySearchIds, setHistorySearchIds] = useState<string[]>([]);
   const [historySearching, setHistorySearching] = useState(false);
   const [historySearchError, setHistorySearchError] = useState<string | null>(null);
-  const [historySession, setHistorySession] = useState<SessionMeta | null>(null);
-  const [historyItems, setHistoryItems] = useState<Item[]>([]);
-  const [transcriptLoading, setTranscriptLoading] = useState(false);
-  const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyListError, setHistoryListError] = useState<string | null>(null);
   const [historyRevision, setHistoryRevision] = useState(0);
   const [update, setUpdate] = useState<Update | null>(null);
   const [updating, setUpdating] = useState(false);
+  /// Non-null while the banner is asking "this will stop N conversations — sure?".
+  /// `busy: null` inside means the count itself failed.
+  const [updateGate, setUpdateGate] = useState<{ busy: number | null } | null>(null);
   const [installLine, setInstallLine] = useState<string | null>(null);
   const [installDetail, setInstallDetail] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const transcriptRequest = useRef(0);
+  // `session/load` replays before its response. Keep those normal ACP updates
+  // together, then render the whole replay through the history reducer.
+  const sessionReplays = useRef<Map<string, SessionUpdate[]>>(new Map());
   // A warm sign-in returns in well under a second. Wait 1.5s before promising a
   // browser window, so re-authenticating an already-valid login doesn't flash
   // instructions for something that never happens.
@@ -408,26 +446,57 @@ export default function App() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [activeTab?.items, activeTab?.busy, historySession]);
+  }, [activeTab?.items, activeTab?.busy]);
 
+  // Ask Rust what this window is: is grok installed, and does this window already
+  // own a project? A window built by `open_project` comes up straight into a new
+  // chat in that folder; only a window that genuinely has no project shows the
+  // launcher. Guarded by a ref because this arm spawns a grok process, and
+  // StrictMode's development double-invoke would otherwise spawn two.
+  const bootstrapped = useRef(false);
   useEffect(() => {
-    authStatus()
-      .then((s) => setStage(s.grok_installed ? "ready" : "needs-install"))
-      .catch(() => setStage("needs-install"));
+    if (bootstrapped.current) return;
+    bootstrapped.current = true;
+    void (async () => {
+      // Ask first: it decides which screen we land on, and an install failure
+      // shouldn't lose the answer.
+      const cwd = await windowProject().catch(() => null);
+      setProjectCwd(cwd);
+      const installed = await authStatus()
+        .then((s) => s.grok_installed)
+        .catch(() => false);
+      if (!installed) {
+        setStage("needs-install");
+        return;
+      }
+      if (!cwd) {
+        setStage("ready");
+        return;
+      }
+      // Consuming, and null for almost every launch. Null is a new chat — the
+      // ordinary case — so it says nothing and shows nothing.
+      const resume = await pendingResume().catch(() => null);
+      await enterProject(cwd, resume);
+    })();
   }, []);
 
-  // Refresh the recents whenever we're back at the picker — the CLI may have
+  // Refresh the recents whenever we're back at the launcher — the CLI may have
   // gained sessions since last time (including from the terminal).
   useEffect(() => {
     if (stage === "ready") recentProjects().then(setRecents).catch(() => setRecents([]));
   }, [stage]);
 
+  // The sidebar is scoped to the window: a launcher lists every conversation on
+  // the machine (that list is how you *find* a project), a project window lists
+  // only the conversations made in its folder. `undefined` is the "all of them"
+  // arm of Rust's `Option<String>` — the store already keys sessions by cwd, so
+  // there is no matching to invent here.
   useEffect(() => {
     if (stage !== "ready" && stage !== "chat") return;
     let cancelled = false;
     setHistoryLoading(true);
     setHistoryListError(null);
-    listSessions()
+    listSessions(projectCwd ?? undefined)
       .then((sessions) => {
         if (!cancelled) setHistorySessions(sessions);
       })
@@ -443,7 +512,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [stage, historyRevision]);
+  }, [stage, historyRevision, projectCwd]);
 
   useEffect(() => {
     if (stage !== "ready" && stage !== "chat") return;
@@ -458,7 +527,7 @@ export default function App() {
     let cancelled = false;
     setHistorySearching(true);
     const timer = window.setTimeout(() => {
-      searchSessions(query)
+      searchSessions(query, projectCwd ?? undefined)
         .then((ids) => {
           if (!cancelled) {
             setHistorySearchIds(ids);
@@ -483,7 +552,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [historyQuery, stage]);
+  }, [historyQuery, stage, projectCwd]);
 
   // Offer updates rather than forcing them: an agent mid-task shouldn't be
   // restarted out from under the user. `check()` is a no-op in dev.
@@ -497,9 +566,13 @@ export default function App() {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
 
-    listen("tray-new-chat", () => {
-      void addRunRef.current();
-    })
+    // The 9th listener — `subscribe()` owns the other 8. Window-scoped like them:
+    // the tray resolves a specific window and `emit_to`s it, so a broadcast
+    // listener here would open a new chat in every window at once.
+    getCurrentWebviewWindow()
+      .listen("tray-new-chat", () => {
+        void addRunRef.current();
+      })
       .then((stopListening) => {
         if (cancelled) stopListening();
         else unlisten = stopListening;
@@ -515,7 +588,7 @@ export default function App() {
   useEffect(() => {
     const dropTabId = activeTab?.id;
     const dropCwd = activeTab?.cwd;
-    if (stage !== "chat" || !dropTabId || !dropCwd || historySession) {
+    if (stage !== "chat" || !dropTabId || !dropCwd) {
       setDragging(false);
       return;
     }
@@ -549,16 +622,41 @@ export default function App() {
       cancelled = true;
       unlisten?.();
     };
-  }, [activeTab?.cwd, activeTab?.id, historySession, stage, updateTab]);
+  }, [activeTab?.cwd, activeTab?.id, stage, updateTab]);
 
-  async function installUpdate() {
+  /// The banner's Update button. Updating restarts the whole app, which takes
+  /// every window's agent down with it — so count them first and say so. Still an
+  /// offer, not a block: refusing to update while anything is running is exactly
+  /// the "restarted out from under the user" behaviour this app avoids.
+  ///
+  /// The gate is the banner itself, not a modal. `window.confirm` is not an option
+  /// here — wry's `WKUIDelegate` doesn't implement `runJavaScriptConfirmPanel`, so
+  /// on macOS it returns false with no dialog and the button would silently do
+  /// nothing — and the dialog plugin's `confirm` isn't in our granted permissions.
+  async function askUpdate() {
+    if (!update) return;
+    // A count we couldn't take is not a count of zero. `null` still gates, with
+    // copy that doesn't pretend to a number we don't have.
+    const busy = await busySessions().catch(() => null);
+    if (busy === 0) {
+      await runUpdate();
+      return;
+    }
+    setUpdateGate({ busy });
+  }
+
+  async function runUpdate() {
     if (!update) return;
     setUpdating(true);
     try {
       await update.downloadAndInstall();
+      // Stop the agents ourselves instead of letting the relaunch orphan them: a
+      // grok killed without its teardown leaves its approval gate armed on disk.
+      await shutdownAll().catch(() => {});
       await relaunch();
     } catch (e) {
       setUpdating(false);
+      setUpdateGate(null);
       setNotice(`Update failed: ${e}`);
     }
   }
@@ -576,6 +674,12 @@ export default function App() {
   const onUpdate = useCallback(
     (tabId: string, u: SessionUpdate) => {
       if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
+
+      const replay = sessionReplays.current.get(tabId);
+      if (replay) {
+        replay.push(u);
+        return;
+      }
 
       switch (u.sessionUpdate) {
         case "agent_message_chunk": {
@@ -649,17 +753,6 @@ export default function App() {
     async (tabId: string) => {
       const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
       if (!tab) return;
-      if (!tab.cwd) {
-        updateTab(tabId, (current) => ({
-          ...current,
-          authPending: null,
-          error: null,
-          needsAuth: false,
-          authMethods: [],
-        }));
-        setStage("chat");
-        return;
-      }
       // Hold the sign-in screen — with a live line — across `openSession` rather
       // than cutting to a chat that can't accept a prompt yet. Same reason
       // `needsAuth` stays true until there's a session to show.
@@ -719,8 +812,15 @@ export default function App() {
         if (!line) return;
         updateTab(tabId, (tab) => (tab.connecting ? { ...tab, connectLine: line } : tab));
       },
+      // Installing the CLI is machine-wide, so `acp-install` stays broadcast: a
+      // window watching the install screen must follow an install started from a
+      // *different* window. Both stage writes are functionally guarded — a window
+      // already in `chat` has a live grok and its own UI, and flipping it to
+      // `installing`/`ready` from under a running conversation would replace that
+      // whole screen over an event that isn't about it.
       onInstall: (event) => {
         if (event.status === "started") {
+          setStage((s) => (s === "needs-install" ? "installing" : s));
           setInstallLine(INSTALL_COPY.installing);
           setInstallDetail(null);
         } else if (event.status === "stage") {
@@ -729,6 +829,9 @@ export default function App() {
         } else {
           // done and failed both end the run; `doInstall`'s own catch owns the
           // error copy, so there's nothing left for a status line to say.
+          if (event.status === "done") {
+            setStage((s) => (s === "installing" || s === "needs-install" ? "ready" : s));
+          }
           setInstallLine(null);
           setInstallDetail(null);
         }
@@ -738,7 +841,7 @@ export default function App() {
         openBubbles.current.set(tabId, {});
         updateTab(tabId, (tab) => ({
           ...tab,
-          items: [...tab.items, { id: itemId("p"), kind: "ask", req, decided: null }],
+          items: [...tab.items, { id: itemId("p"), kind: "ask", req, decided: null, failed: null }],
         }));
       },
       onTurnEnd: (tabId, result) => {
@@ -793,18 +896,39 @@ export default function App() {
     };
   }, [clearAuthTimer, finishSignIn, onUpdate, updateTab]);
 
+  /// Answering can now legitimately fail: Rust consumes the request on the first
+  /// answer and rejects any second one, so an approval card open in two places
+  /// only counts once. Which means "the user clicked Allow" and "the edit was
+  /// allowed" are different facts, and `decided` is only ever the second one —
+  /// writing it regardless, as this used to, tells the user an edit went through
+  /// that didn't.
   async function decide(tab: Tab, item: AskItem, optionId: string | null, label: string) {
-    // Hook-gated requests (the path that fires today) go back through respondHook;
-    // ACP requests through respondPermission. `optionId === "allow"` means approve.
-    if (item.req.hookToolUseId) {
-      await respondHook(tab.id, item.req.hookToolUseId, optionId === "allow").catch(() => {});
-    } else {
-      await respondPermission(tab.id, item.req.requestId, optionId).catch(() => {});
+    const settle = (patch: Partial<AskItem>) =>
+      updateTab(tab.id, (current) => ({
+        ...current,
+        items: current.items.map((i) => (isAsk(i) && i.id === item.id ? { ...i, ...patch } : i)),
+      }));
+    try {
+      // Hook-gated requests (the path that fires today) go back through respondHook;
+      // ACP requests through respondPermission. `optionId === "allow"` means approve.
+      if (item.req.hookToolUseId) {
+        await respondHook(tab.id, item.req.hookToolUseId, optionId === "allow");
+      } else {
+        await respondPermission(tab.id, item.req.requestId, optionId);
+      }
+    } catch (e) {
+      const message = String(e);
+      settle({
+        // Rust's ownership rejection is the expected failure and deserves copy a
+        // person can act on; anything else is unexpected and is shown verbatim
+        // rather than dressed up as something we recognize.
+        failed: message.includes("isn't yours")
+          ? "Not yours — answered in another window."
+          : message,
+      });
+      return;
     }
-    updateTab(tab.id, (current) => ({
-      ...current,
-      items: current.items.map((i) => (isAsk(i) && i.id === item.id ? { ...i, decided: label } : i)),
-    }));
+    settle({ decided: label });
   }
 
   async function doInstall() {
@@ -814,7 +938,10 @@ export default function App() {
     setInstallDetail(null);
     try {
       await installGrok();
-      setStage("ready");
+      // A window can't have a project before grok exists in practice, but if it
+      // somehow does, land in it rather than at a launcher it doesn't need.
+      if (projectCwd) await enterProject(projectCwd);
+      else setStage("ready");
     } catch (e) {
       setNotice(String(e));
       setStage("needs-install");
@@ -824,24 +951,24 @@ export default function App() {
     }
   }
 
-  function addTab(): Tab {
-    const tab = createTab();
+  function addTab(cwd: string): Tab {
+    const tab = createTab(cwd);
     setTabs((current) => {
       const nextTabs = [...current, tab];
       tabsRef.current = nextTabs;
       return nextTabs;
     });
     setActiveTabId(tab.id);
-    setStage("chat");
     return tab;
   }
 
-  async function openFolder(tabId: string, path: string) {
+  /// Start a fresh conversation in a tab. Every caller passes the window's own
+  /// project — a tab never picks its own folder any more.
+  async function startChat(tabId: string, path: string) {
     // Connect no longer freezes the UI, which means the button is now clickable
     // while it runs. Mirrors submit()'s `if (!text || tab.busy) return;` —
     // without it a double-click spawns a second grok the first one never releases.
     if (tabsRef.current.find((tab) => tab.id === tabId)?.connecting) return;
-    closeTranscript();
     beginConnect(tabId);
     try {
       const res = await connect(tabId, path);
@@ -860,7 +987,6 @@ export default function App() {
       }));
       setDragging(false);
       setHistoryRevision((revision) => revision + 1);
-      setStage("chat");
     } catch (e) {
       updateTab(tabId, (tab) => ({ ...tab, error: String(e) }));
     } finally {
@@ -868,32 +994,75 @@ export default function App() {
     }
   }
 
-  async function pickFolder(tabId?: string) {
-    closeTranscript();
-    const target = tabId ? tabsRef.current.find((tab) => tab.id === tabId) : addTab();
-    if (!target) return;
-    setActiveTabId(target.id);
+  /// This window now owns `cwd`: show it, and put the user straight into a chat
+  /// they can type in. A project is not a reason to make someone pick a
+  /// conversation first — the sidebar is beside them for that, not in front.
+  ///
+  /// Only ever called once Rust agrees this window owns the folder: either
+  /// `window_project()` said so at startup, or `open_project` came back
+  /// `"adopted"`. Nothing else may set `projectCwd` — a cwd with no registry
+  /// entry behind it is what makes `connect` fail with "That window was closed."
+  ///
+  /// `resumeSessionId` is the `--resume <id>` case: land on that conversation
+  /// instead of a new one. It goes through `openConversation` like every other
+  /// way of opening a conversation — same loader, same `finally`, no second path.
+  async function enterProject(cwd: string, resumeSessionId?: string | null) {
+    setProjectCwd(cwd);
+    setStage("chat");
+    const tab = addTab(cwd);
+    if (!resumeSessionId) {
+      await startChat(tab.id, cwd);
+      return;
+    }
+    // Only for the title: Rust already resolved this id to this project, so a
+    // miss means the listing failed, not that the conversation isn't there.
+    // Resuming with an unknown title beats refusing to resume at all.
+    const known = await listSessions(cwd)
+      .then((all) => all.find((session) => session.id === resumeSessionId))
+      .catch(() => undefined);
+    await openConversation(known ?? { id: resumeSessionId, cwd, title: "" }, tab);
+  }
+
+  /// Hand a folder to Rust and do what it says. `"adopted"` is the only outcome
+  /// this window acts on; `"focused"` and `"opened"` both mean some other window
+  /// has the project now and this one stays exactly where it is.
+  async function claimProject(path: string): Promise<boolean> {
+    // `open_project` is clickable while it runs, and the second call would land
+    // after the first has reserved the folder — so it'd come back "focused" and
+    // this window would quietly do nothing. Same shape as startChat's guard.
+    if (openingProject) return false;
+    setOpeningProject(true);
+    setNotice(null);
+    try {
+      const outcome = await openProject(path);
+      if (outcome.kind !== "adopted") return false;
+      await enterProject(path);
+      return true;
+    } catch (e) {
+      setNotice(String(e));
+      return false;
+    } finally {
+      setOpeningProject(false);
+    }
+  }
+
+  async function pickProject() {
     const picked = await open({ directory: true, multiple: false, title: "Choose a project folder" });
     if (typeof picked !== "string") return;
-    await openFolder(target.id, picked);
+    await claimProject(picked);
   }
 
   async function openRecent(path: string) {
-    const tab = addTab();
-    await openFolder(tab.id, path);
+    await claimProject(path);
   }
 
-  // A new tab is a parallel RUN in the CURRENT project (e.g. one agent fixes a
-  // bug while another writes tests, same repo) — not a different project. Only
-  // fall back to the folder picker when nothing is open yet.
+  // A new tab is a parallel conversation in THIS WINDOW'S project (e.g. one agent
+  // fixes a bug while another writes tests, same repo). It has no folder question
+  // to answer any more: the window already answered it.
   async function addRun() {
-    const folder = activeTab?.cwd ?? tabsRef.current.find((tab) => tab.cwd)?.cwd ?? null;
-    if (!folder) {
-      await pickFolder();
-      return;
-    }
-    const tab = addTab();
-    await openFolder(tab.id, folder);
+    if (!projectCwd) return;
+    const tab = addTab(projectCwd);
+    await startChat(tab.id, projectCwd);
   }
 
   addRunRef.current = addRun;
@@ -975,35 +1144,133 @@ export default function App() {
       setActiveTabId(nextTabs[Math.min(index, nextTabs.length - 1)]?.id ?? null);
     }
     setDragging(false);
-    if (nextTabs.length === 0) setStage("ready");
+    // The window keeps its project when its last tab closes — closing a
+    // conversation is not the same as letting go of the folder.
   }
 
-  async function viewSession(session: SessionMeta) {
-    const request = ++transcriptRequest.current;
-    setHistorySession(session);
-    setHistoryItems([]);
-    setTranscriptLoading(true);
-    setHistoryError(null);
+  /// Clicking a conversation in the sidebar opens it, live, right here. There is
+  /// no read-only transcript step any more: it made you view a conversation, then
+  /// decide to continue it, before you could say anything.
+  ///
+  /// From a launcher the session's project has to be claimed first — the row
+  /// already carries its `cwd`, so we hand that to Rust and let it decide. From a
+  /// project window the folder is settled and we go straight to the conversation.
+  async function openConversationFromSidebar(session: SessionMeta) {
+    if (!projectCwd) {
+      if (openingProject) return;
+      setOpeningProject(true);
+      setNotice(null);
+      try {
+        const outcome = await openProject(session.cwd);
+        // Another window owns this project — it was raised or built, and it will
+        // show its own conversations. Nothing left for this window to do.
+        if (outcome.kind !== "adopted") return;
+      } catch (e) {
+        setNotice(String(e));
+        return;
+      } finally {
+        setOpeningProject(false);
+      }
+      setProjectCwd(session.cwd);
+      setStage("chat");
+      await openConversation(session, addTab(session.cwd));
+      return;
+    }
+
+    // Already open — or already opening. Matching `loadingSessionId` too is what
+    // stops a second click during the load from opening a duplicate tab of the
+    // conversation that's still on its way in.
+    const existing = tabsRef.current.find(
+      (tab) => tab.sessionId === session.id || tab.loadingSessionId === session.id,
+    );
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+
+    // Reuse a tab the user hasn't said anything in yet rather than stacking an
+    // empty new chat next to the conversation they asked for.
+    const pristine = tabsRef.current.find(
+      (tab) => tab.items.length === 0 && !tab.busy && !tab.connecting,
+    );
+    const tab = pristine ?? addTab(projectCwd);
+    setActiveTabId(tab.id);
+    await openConversation(session, tab);
+  }
+
+  async function openConversation(session: ConversationRef, tab: Tab) {
+    // Claim the conversation on the tab before the first await, so the gap
+    // between the click and the load isn't a window in which this tab looks free.
+    updateTab(tab.id, (current) => ({
+      ...current,
+      loadingSessionId: session.id,
+      title: session.title || null,
+    }));
+    beginConnect(tab.id);
     try {
-      const updates = await loadSessionUpdates(session.cwd, session.id);
-      if (transcriptRequest.current === request) setHistoryItems(reduceUpdates(updates));
+      if (!tab.sessionId) {
+        const connected = await connect(tab.id, session.cwd);
+        if (!tabsRef.current.some((candidate) => candidate.id === tab.id)) {
+          await cancelRun(tab.id).catch(() => {});
+          return;
+        }
+        updateTab(tab.id, (current) => ({
+          ...current,
+          cwd: session.cwd,
+          sessionId: connected.session_id,
+          attachments: [],
+          needsAuth: connected.needs_auth,
+          authMethods: connected.auth_methods,
+          error: null,
+        }));
+        if (connected.needs_auth) return;
+      }
+
+      sessionReplays.current.set(tab.id, []);
+      updateTab(tab.id, (current) => ({
+        ...current,
+        items: [],
+        busy: false,
+        attachments: [],
+        usageTokens: 0,
+        error: null,
+      }));
+      openBubbles.current.set(tab.id, {});
+      planIds.current.delete(tab.id);
+
+      const sessionId = await loadSession(tab.id, session.cwd, session.id);
+      const updates = sessionReplays.current.get(tab.id) ?? [];
+      sessionReplays.current.delete(tab.id);
+      if (!tabsRef.current.some((candidate) => candidate.id === tab.id)) return;
+      updateTab(tab.id, (current) => ({
+        ...current,
+        sessionId,
+        items: reduceUpdates(updates),
+        busy: false,
+        error: null,
+      }));
+      setHistoryRevision((revision) => revision + 1);
     } catch (error) {
-      if (transcriptRequest.current === request) setHistoryError(String(error));
+      sessionReplays.current.delete(tab.id);
+      updateTab(tab.id, (current) => ({ ...current, busy: false, error: String(error) }));
     } finally {
-      if (transcriptRequest.current === request) setTranscriptLoading(false);
+      endConnect(tab.id);
+      // Every exit lands here — success, failure, and the two "tab went away"
+      // early returns. A stuck `loadingSessionId` would make the sidebar think
+      // this conversation is open forever and refuse to ever reopen it.
+      updateTab(tab.id, (current) => ({ ...current, loadingSessionId: null }));
     }
   }
 
-  function closeTranscript() {
-    transcriptRequest.current += 1;
-    setHistorySession(null);
-    setHistoryItems([]);
-    setTranscriptLoading(false);
-    setHistoryError(null);
-  }
-
   const banner = update ? (
-    <UpdateBanner update={update} busy={updating} onInstall={installUpdate} />
+    <UpdateBanner
+      update={update}
+      busy={updating}
+      gate={updateGate}
+      onAsk={askUpdate}
+      onConfirm={runUpdate}
+      onCancel={() => setUpdateGate(null)}
+    />
   ) : null;
 
   if (stage === "checking") return <Splash title="Grok Build Desktop" line="Getting things ready…" />;
@@ -1035,6 +1302,17 @@ export default function App() {
       )
     : historySessions;
 
+  // Which conversations are open in a tab of this window, and which one you're
+  // looking at. Derived from the tabs themselves — a second source of truth here
+  // could disagree with the tab strip, and the tab strip is the one that's real.
+  // A tab loading a conversation counts as open: it is, the load just isn't done.
+  const openIds = new Map<string, string>();
+  for (const tab of tabs) {
+    const id = tab.sessionId ?? tab.loadingSessionId;
+    if (id) openIds.set(id, tab.id);
+  }
+  const activeSessionId = activeTab?.sessionId ?? activeTab?.loadingSessionId ?? null;
+
   return (
     <div className="shell">
       {banner}
@@ -1045,13 +1323,17 @@ export default function App() {
               <span className="mark" />
               <strong>Grok Build</strong>
             </div>
-            <button className="new-chat primary" onClick={() => addRun()}>
-              New chat
-            </button>
+            {/* No project, no "New chat": there's no folder for it to be in yet.
+                "Open folder…" is the one thing a launcher can do. */}
+            {projectCwd && (
+              <button className="new-chat primary" onClick={() => addRun()}>
+                New chat
+              </button>
+            )}
             <button
               className="open-folder ghost"
-              onClick={() => pickFolder()}
-              title="Open a different project folder"
+              onClick={() => pickProject()}
+              title={projectCwd ? "Open another project in its own window" : "Open a project folder"}
             >
               Open folder…
             </button>
@@ -1084,57 +1366,70 @@ export default function App() {
                         historySearchError
                         ? "No title matches"
                         : "No matches"
-                    : "No conversations yet"}
+                    : // An empty project is not a broken list. Rust answers a cwd
+                      // it has no sessions for with an empty list, not an error,
+                      // so the two must not read the same.
+                      projectCwd
+                      ? "No conversations in this project yet"
+                      : "No conversations yet"}
                 </div>
               )}
             {(!historyLoading || historySessions.length > 0) &&
               !historyListError &&
-              filteredSessions.map((session) => (
-                <button
-                  key={session.id}
-                  className={`side-row${historySession?.id === session.id ? " active" : ""}`}
-                  onClick={() => viewSession(session)}
-                  title={session.cwd}
-                  aria-current={historySession?.id === session.id ? "page" : undefined}
-                >
-                  <strong>{session.title || "Untitled conversation"}</strong>
-                  <span className="side-row-meta">
-                    {folderName(session.cwd)} · {sessionDate(session.updated_at)}
-                  </span>
-                </button>
-              ))}
+              filteredSessions.map((session) => {
+                const isActive = activeSessionId === session.id;
+                const isOpen = openIds.has(session.id);
+                return (
+                  <button
+                    key={session.id}
+                    className={`side-row${isActive ? " active" : ""}`}
+                    onClick={() => void openConversationFromSidebar(session)}
+                    title={session.cwd}
+                    aria-current={isActive ? "page" : undefined}
+                  >
+                    <strong>{session.title || "Untitled conversation"}</strong>
+                    <span className="side-row-meta">
+                      {/* The folder only earns its space in a launcher, where the
+                          list spans every project. In a project window it's the
+                          same word on every row. */}
+                      {!projectCwd && `${folderName(session.cwd)} · `}
+                      {/* Open-but-not-active is worth saying: clicking it switches
+                          tabs rather than loading anything. The active one already
+                          says so by being highlighted. */}
+                      {isOpen && !isActive && "Open · "}
+                      {sessionDate(session.updated_at)}
+                    </span>
+                  </button>
+                );
+              })}
           </div>
         </aside>
 
         <main className="content">
-          {dragging && stage === "chat" && activeTab?.cwd && !historySession && (
+          {dragging && stage === "chat" && activeTab?.cwd && (
             <div className="drop-overlay">Drop files to attach</div>
           )}
-          {historySession ? (
-            <>
-              <header className="content-header">
-                <div className="content-title">
-                  <h1>{historySession.title || "Untitled conversation"}</h1>
-                  <span title={historySession.cwd}>{folderName(historySession.cwd)}</span>
+          {!projectCwd ? (
+            <div className="content-empty">
+              <h1>Open a folder to start</h1>
+              <p>Each project gets its own window. Pick one, or open a conversation on the left.</p>
+              <button className="primary" onClick={() => pickProject()} disabled={openingProject}>
+                Choose a folder…
+              </button>
+              <Progress line={openingProject ? "Opening your project…" : null} />
+              {recents.length > 0 && (
+                <div className="recents">
+                  <div className="recents-head">Recent</div>
+                  {recents.map((p) => (
+                    <button key={p.path} className="recent" onClick={() => openRecent(p.path)} title={p.path}>
+                      <strong>{p.name}</strong>
+                      <span>{p.path}</span>
+                    </button>
+                  ))}
                 </div>
-                <button
-                  className="transcript-close"
-                  onClick={closeTranscript}
-                  aria-label="Close transcript"
-                  title="Close transcript"
-                >
-                  ×
-                </button>
-              </header>
-              <div className="stream">
-                {transcriptLoading && <div className="history-state">Loading conversation…</div>}
-                {!transcriptLoading && historyError && <div className="history-state error">{historyError}</div>}
-                {!transcriptLoading && !historyError && historyItems.length === 0 && (
-                  <div className="history-state">This conversation has no messages.</div>
-                )}
-                <TranscriptItems items={historyItems} />
-              </div>
-            </>
+              )}
+              {notice && <p className="notice error">{notice}</p>}
+            </div>
           ) : tabs.length > 0 ? (
             <>
               <nav className="tab-strip" aria-label="Chat tabs">
@@ -1144,14 +1439,14 @@ export default function App() {
                       className="tab-select"
                       onClick={() => setActiveTabId(tab.id)}
                       aria-current={tab.id === activeTabId ? "page" : undefined}
-                      title={tab.cwd ?? "New tab"}
+                      title={tab.title ?? "New chat"}
                     >
-                      {tab.cwd ? folderName(tab.cwd) : "New tab"}
+                      {tab.title ?? "New chat"}
                     </button>
                     <button
                       className="tab-close"
                       onClick={() => closeTab(tab.id)}
-                      aria-label={`Close ${tab.cwd ? folderName(tab.cwd) : "new tab"}`}
+                      aria-label={`Close ${tab.title ?? "new chat"}`}
                       title="Close tab"
                     >
                       ×
@@ -1161,12 +1456,17 @@ export default function App() {
                 <button
                   className="tab-add"
                   onClick={() => addRun()}
-                  aria-label="New run in this project"
-                  title="New run in this project"
+                  aria-label="New conversation"
+                  title="New conversation"
                 >
                   +
                 </button>
               </nav>
+
+              {/* Window-level failures — an "Open folder…" that Rust refused. A
+                  tab's own error renders on the tab; this one belongs to no tab,
+                  and before it was rendered here it failed silently. */}
+              {notice && <p className="notice error">{notice}</p>}
 
               {activeTab?.needsAuth ? (
                 <div className="content-empty tab-auth">
@@ -1194,7 +1494,7 @@ export default function App() {
                   />
                   {activeTab.error && <p className="notice error">{activeTab.error}</p>}
                 </div>
-              ) : activeTab?.cwd ? (
+              ) : activeTab ? (
                 <>
                   <header className="bar">
                     {/* The full path is the answer to "does it actually know where it's working?" */}
@@ -1313,44 +1613,18 @@ export default function App() {
                     </button>
                   </form>
                 </>
-              ) : (
-                <div className="content-empty">
-                  <h1>Choose a folder for this tab</h1>
-                  <p>This tab is ready for a project folder.</p>
-                  <button className="primary" onClick={() => pickFolder(activeTab?.id)}>
-                    Choose a folder…
-                  </button>
-                  <Progress
-                    line={activeTab ? connectLineFor(activeTab) : null}
-                    onCancel={
-                      activeTab?.connectShowCancel
-                        ? () => void cancelRun(activeTab.id).catch(() => {})
-                        : undefined
-                    }
-                  />
-                  {activeTab?.error && <p className="notice error">{activeTab.error}</p>}
-                  {notice && <p className="notice error">{notice}</p>}
-                </div>
-              )}
+              ) : null}
             </>
           ) : (
+            // A project window whose tabs have all been closed. It keeps the
+            // folder — closing a conversation isn't letting go of the project —
+            // so this is one button, not the picker over again.
             <div className="content-empty">
-              <h1>Open a folder to start</h1>
-              <p>Choose a project folder for your next conversation.</p>
-              <button className="primary" onClick={() => pickFolder()}>
-                Choose a folder…
+              <h1>Nothing open in {folderName(projectCwd)}</h1>
+              <p>Start a new conversation, or pick one from the left.</p>
+              <button className="primary" onClick={() => addRun()}>
+                New chat
               </button>
-              {recents.length > 0 && (
-                <div className="recents">
-                  <div className="recents-head">Recent</div>
-                  {recents.map((p) => (
-                    <button key={p.path} className="recent" onClick={() => openRecent(p.path)} title={p.path}>
-                      <strong>{p.name}</strong>
-                      <span>{p.path}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
               {notice && <p className="notice error">{notice}</p>}
             </div>
           )}
@@ -1426,6 +1700,18 @@ function PermissionCard({
       <div className="ask decided">
         <span className="tick" />
         {item.decided} — {toolCall?.title ?? "change"}
+      </div>
+    );
+  }
+
+  // The answer didn't land, so this must not wear the decided card's tick. The
+  // buttons go too: the request is spent, and offering them again would only
+  // produce the same rejection.
+  if (item.failed) {
+    return (
+      <div className="ask">
+        <div className="ask-head">{toolCall?.title ?? "Grok wants to make a change"}</div>
+        <p className="notice error">{item.failed}</p>
       </div>
     );
   }
@@ -1570,20 +1856,52 @@ function Progress({
   );
 }
 
-/// Shown on every screen when a newer release exists. Opt-in, never automatic.
+/// Shown on every screen when a newer release exists — it's app-global truth, and
+/// it stays per-window because it's true in every window. Opt-in, never automatic.
+///
+/// The confirm lives in the banner rather than in a dialog: it's one sentence and
+/// two buttons, and it's the same surface the user just pressed, so it doesn't
+/// take over the screen to say the restart will stop what's running.
 function UpdateBanner({
   update,
   busy,
-  onInstall,
+  gate,
+  onAsk,
+  onConfirm,
+  onCancel,
 }: {
   update: Update;
   busy: boolean;
-  onInstall: () => void;
+  gate: { busy: number | null } | null;
+  onAsk: () => void;
+  onConfirm: () => void;
+  onCancel: () => void;
 }) {
+  if (gate) {
+    return (
+      <div className="update">
+        <span>
+          {gate.busy === null
+            ? // We couldn't count them, so we don't name a number.
+              "Updating restarts the app and stops anything still running."
+            : `Updating stops ${gate.busy} running ${
+                gate.busy === 1 ? "conversation" : "conversations"
+              } and restarts the app.`}
+        </span>
+        <button onClick={onConfirm} disabled={busy}>
+          {busy ? "Updating…" : "Update anyway"}
+        </button>
+        <button onClick={onCancel} disabled={busy}>
+          Not now
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="update">
       <span>Version {update.version} is available.</span>
-      <button onClick={onInstall} disabled={busy}>
+      <button onClick={onAsk} disabled={busy}>
         {busy ? "Updating…" : "Update & restart"}
       </button>
     </div>

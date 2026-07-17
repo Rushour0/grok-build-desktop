@@ -1,7 +1,8 @@
 // The only file that talks to the Rust host. Everything else works in terms of
 // the types below, so the transport stays swappable.
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 export interface AuthStatus {
   grok_installed: boolean;
@@ -39,19 +40,55 @@ export interface SessionMeta {
   num_messages: number;
 }
 
+/// What `openProject` did with the folder. Only `"adopted"` is actionable by the
+/// caller — it means *this* window had no project and has just taken this one, so
+/// it should render it. `"focused"` (already open elsewhere; that window was
+/// raised) and `"opened"` (a new window was built) both mean another window owns
+/// the project and this one does nothing further.
+export interface OpenOutcome {
+  kind: "focused" | "adopted" | "opened";
+  label: string;
+}
+
 export const authStatus = () => invoke<AuthStatus>("auth_status");
 export const installGrok = () => invoke<string>("install_grok");
 /// Recent projects, read out of the Grok CLI's own session store.
 export const recentProjects = () => invoke<Project[]>("recent_projects");
+
+/// Give a folder a window: focus the one that already has it, adopt it into this
+/// window if this window has no project yet, or build a new one. Rust owns the
+/// decision — the webview never picks a window label.
+export const openProject = (cwd: string) => invoke<OpenOutcome>("open_project", { cwd });
+/// This window's project folder, or null while it's still a launcher. We *ask*
+/// rather than being told: a cwd handed to the webview and trusted back is not
+/// an identity, it's a suggestion.
+export const windowProject = () => invoke<string | null>("window_project");
+/// The conversation this window was launched to resume (`<app> --resume <id>`), or
+/// null — which is the overwhelmingly common case and means nothing at all, not an
+/// error. Ask-don't-tell for the same reason as `windowProject`: the command line
+/// is resolved before there is any webview to push an event to.
+///
+/// CONSUMING — Rust hands the id over once and forgets it. Call this exactly once,
+/// on mount; polling it, or calling it from anything that remounts, gets you null
+/// and a resume that silently never happens.
+export const pendingResume = () => invoke<string | null>("pending_resume");
+
+/// How many agent sessions are alive across every window. The updater's gate.
+export const busySessions = () => invoke<number>("busy_sessions");
+/// Tear down every session in every window, without quitting.
+export const shutdownAll = () => invoke<void>("shutdown_all");
+
+/// Omit `cwd` for every conversation on this machine; pass one to get only the
+/// conversations made in that folder.
 export const listSessions = (cwd?: string) => invoke<SessionMeta[]>("list_sessions", { cwd });
-export const loadSessionUpdates = (cwd: string, sessionId: string) =>
-  invoke<SessionUpdate[]>("load_session_updates", { cwd, sessionId });
 export const searchSessions = (query: string, cwd?: string) =>
   invoke<string[]>("search_sessions", { query, cwd });
 export const connect = (tabId: string, cwd: string) => invoke<ConnectResult>("connect", { tabId, cwd });
 export const authenticate = (tabId: string, methodId: string) =>
   invoke<void>("authenticate", { tabId, methodId });
 export const openSession = (tabId: string, cwd: string) => invoke<string>("open_session", { tabId, cwd });
+export const loadSession = (tabId: string, cwd: string, sessionId: string) =>
+  invoke<string>("load_session", { tabId, cwd, sessionId });
 export const sendPrompt = (tabId: string, text: string) => invoke<void>("send_prompt", { tabId, text });
 export const cancelRun = (tabId: string) => invoke<void>("cancel", { tabId });
 
@@ -173,24 +210,30 @@ type Handlers = {
 };
 
 /// Subscribe to the agent stream. Returns a disposer that detaches every listener.
+///
+/// Listeners are scoped to *this* window, not the app: Rust routes per-window
+/// events with `emit_to(&key.window, ..)`, so a window must never see another
+/// window's stream. Window-scoped listeners still receive app-wide broadcasts
+/// (`acp-install` is one), so scoping costs nothing and gains the boundary.
 export async function subscribe(h: Handlers): Promise<UnlistenFn> {
+  const win = getCurrentWebviewWindow();
   const offs = await Promise.all([
-    listen<AcpUpdate>("acp-update", (e) =>
+    win.listen<AcpUpdate>("acp-update", (e) =>
       e.payload?.update && h.onUpdate(e.payload.tabId, e.payload.update),
     ),
-    listen<PermissionRequest & { tabId: string }>("acp-permission", (e) =>
+    win.listen<PermissionRequest & { tabId: string }>("acp-permission", (e) =>
       e.payload && h.onPermission(e.payload.tabId, e.payload),
     ),
-    listen<TurnEnd & { tabId: string }>("acp-turn-end", (e) =>
+    win.listen<TurnEnd & { tabId: string }>("acp-turn-end", (e) =>
       e.payload && h.onTurnEnd(e.payload.tabId, e.payload),
     ),
-    listen<{ tabId: string; message?: string }>("acp-error", (e) =>
+    win.listen<{ tabId: string; message?: string }>("acp-error", (e) =>
       e.payload && h.onError(e.payload.tabId, e.payload.message ?? "Something went wrong"),
     ),
-    listen<{ tabId: string }>("acp-closed", (e) => e.payload && h.onClosed(e.payload.tabId)),
-    listen<AcpAuth>("acp-auth", (e) => e.payload && h.onAuth?.(e.payload.tabId, e.payload)),
-    listen<AcpConnect>("acp-connect", (e) => e.payload && h.onConnect?.(e.payload.tabId, e.payload)),
-    listen<InstallEvent>("acp-install", (e) => e.payload && h.onInstall?.(e.payload)),
+    win.listen<{ tabId: string }>("acp-closed", (e) => e.payload && h.onClosed(e.payload.tabId)),
+    win.listen<AcpAuth>("acp-auth", (e) => e.payload && h.onAuth?.(e.payload.tabId, e.payload)),
+    win.listen<AcpConnect>("acp-connect", (e) => e.payload && h.onConnect?.(e.payload.tabId, e.payload)),
+    win.listen<InstallEvent>("acp-install", (e) => e.payload && h.onInstall?.(e.payload)),
   ]);
   return () => offs.forEach((off) => off());
 }
