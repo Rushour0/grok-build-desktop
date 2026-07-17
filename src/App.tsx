@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import Markdown from "markdown-to-jsx";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
@@ -1634,6 +1636,85 @@ export default function App() {
   );
 }
 
+/// A link in agent-written markdown. Two things have to be true here.
+///
+/// It must not navigate the webview: this window has no back button and no chrome,
+/// so a click that replaced the app with someone's web page would strand the user
+/// in it with no way back. `preventDefault` plus the opener plugin sends it to the
+/// real browser instead, which is the only place a web page belongs.
+///
+/// And only ever an http(s) URL. markdown-to-jsx's built-in sanitizer already drops
+/// `javascript:` and `data:` hrefs (they arrive here as `undefined`), so this
+/// allowlist is the second lock, not the first — `openUrl` hands its argument to
+/// the OS, and the OS will happily act on schemes a browser never would.
+function MarkdownLink({ href, children }: { href?: string; children?: React.ReactNode }) {
+  const url = typeof href === "string" && /^https?:\/\//i.test(href) ? href : null;
+  // A link the sanitizer gutted still reads as text, but it must not dress up as
+  // something clickable that then does nothing.
+  if (!url) return <span className="md-dead-link">{children}</span>;
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noreferrer noopener"
+      onClick={(event) => {
+        event.preventDefault();
+        void openUrl(url).catch(() => {});
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+/// A markdown table is the one block that can't be made to fit: its width is its
+/// content's. Wrapping it lets it scroll in its own box rather than push the
+/// bubble past the 72ch the rest of the transcript is measured to.
+function MarkdownTable({ children }: { children?: React.ReactNode }) {
+  return (
+    <div className="md-scroll">
+      <table>{children}</table>
+    </div>
+  );
+}
+
+/// Grok's output is untrusted: it routinely echoes file contents back, and a file
+/// can hold `<script>` or `<img onerror=…>`. This webview can invoke commands that
+/// touch the filesystem and spawn processes, so rendering that HTML would be remote
+/// code execution, not a defaced page — and `tauri.conf.json` sets `"csp": null`,
+/// so there is no second net under this one.
+///
+/// `disableParsingRawHTML` is what makes that safe: raw HTML is escaped to text
+/// instead of being transcribed into elements. It is load-bearing and not
+/// belt-and-braces — with it off, `<base href>` and `<form action>` in agent output
+/// render as live elements, and a `<base>` tag silently repoints every relative URL
+/// in the app. Nothing here ever reaches `dangerouslySetInnerHTML`: markdown-to-jsx
+/// compiles to a React element tree and produces no HTML string at any point.
+const MARKDOWN_OPTIONS = {
+  disableParsingRawHTML: true,
+  // Without this a one-line answer compiles to a bare inline span, so the same
+  // message would be spaced differently depending on its length.
+  forceBlock: true,
+  overrides: { a: MarkdownLink, table: MarkdownTable },
+} as const;
+
+/// Memoized on `text` alone, which is what keeps streaming from going quadratic.
+/// `reduceUpdates`/`appendText` rebuild only the bubble being appended to and leave
+/// every earlier item referentially identical, so a chunk arriving on the open
+/// bubble re-parses that one message and every finished message above it bails out
+/// here instead of re-parsing on every keystroke of the stream.
+export const MarkdownText = memo(function MarkdownText({ text }: { text: string }) {
+  return <Markdown options={MARKDOWN_OPTIONS}>{text}</Markdown>;
+});
+
+/// Markdown is the agent's own idiom, so it renders for the agent's own words:
+/// `answer` and `thought` alike — the same model emits the same syntax in both, and
+/// leaving thoughts raw would show literal `**` in exactly the place the fix was
+/// asked for. `you` stays verbatim: the user didn't write markdown, and quietly
+/// reinterpreting their text is a small lie about what they typed. `error` stays
+/// verbatim too — it's backend text and must not be reformatted or swallowed.
+const RENDERS_MARKDOWN: ReadonlySet<TextItem["kind"]> = new Set(["answer", "thought"]);
+
 function TranscriptItems({
   items,
   onDecide,
@@ -1653,9 +1734,10 @@ function TranscriptItems({
     if (isAsk(item)) return <PermissionCard key={item.id} item={item} onDecide={onDecide} />;
     if (isPlan(item)) return <PlanCard key={item.id} entries={item.entries} />;
     if (isUsage(item)) return <UsageLine key={item.id} item={item} />;
+    const markdown = RENDERS_MARKDOWN.has(item.kind);
     return (
-      <div key={item.id} className={`bubble ${item.kind}`}>
-        {item.text}
+      <div key={item.id} className={`bubble ${item.kind}${markdown ? " md" : ""}`}>
+        {markdown ? <MarkdownText text={item.text} /> : item.text}
       </div>
     );
   });
