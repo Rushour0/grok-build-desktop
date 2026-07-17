@@ -132,6 +132,11 @@ export const respondHook = (tabId: string, toolUseId: string, allow: boolean) =>
 /// `.venv`, `__pycache__` are skipped; depth and count are capped Rust-side.
 export const listProjectFiles = (cwd: string) => invoke<string[]>("list_project_files", { cwd });
 
+/// Write `content` to `path` on disk (std::fs::write on a blocking thread).
+/// Used by the receipt panel's "Save…" flow after a native file-save dialog
+/// picks the destination path.
+export const saveText = (path: string, content: string) => invoke<void>("save_text", { path, content });
+
 /// The resolved grok binary's `--version` output (trimmed first line). Errors
 /// rather than returning empty on failure — see HANDOFF #3.
 export const grokVersion = () => invoke<string>("grok_version");

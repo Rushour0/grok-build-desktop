@@ -39,6 +39,7 @@ import {
   respondPermission,
   rewindExecute,
   rewindPoints,
+  saveText,
   searchSessions,
   type SessionModelInfo,
   type SessionUpdate,
@@ -250,6 +251,14 @@ describe("commands: name and argument contract", () => {
       tabId: "tab-1",
       pointId: "point-9",
       mode: "both",
+    });
+  });
+
+  it("save_text passes path and content", async () => {
+    await saveText("/repo/app/receipt.md", "# Receipt\n\nhello");
+    expect(invoke).toHaveBeenCalledWith("save_text", {
+      path: "/repo/app/receipt.md",
+      content: "# Receipt\n\nhello",
     });
   });
 });

@@ -3110,3 +3110,75 @@ textarea:focus-visible {
     transition: none;
   }
 }
+
+/* Execution receipt panel — reuses the .prefs overlay shell (.prefs-backdrop/.prefs/
+   .prefs-head/.prefs-section/.prefs-row/.prefs-hint). Only the Markdown preview, the
+   action row, its buttons and the transient status line are receipt-specific. */
+.receipt-panel {
+  width: min(680px, calc(100vw - 2.5rem));
+}
+
+.receipt-preview {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  max-height: 46vh;
+}
+
+.receipt-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.receipt-button {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.8rem;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.receipt-button:hover {
+  background: var(--bg);
+}
+
+.receipt-button:active {
+  transform: translateY(1px) scale(0.99);
+}
+
+/* Transient "Copied"/"Saved" (or an error) feedback, pushed to the right of the actions. */
+.receipt-status {
+  margin-left: auto;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+}
+
+.receipt-status.ok {
+  color: var(--ok);
+}
+
+.receipt-status.error {
+  color: var(--danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .receipt-button {
+    transition: none;
+  }
+}

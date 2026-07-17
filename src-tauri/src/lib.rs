@@ -1927,6 +1927,19 @@ fn list_project_files_inner(root: &Path) -> Vec<String> {
     out
 }
 
+#[tauri::command]
+async fn save_text(path: String, content: String) -> Result<(), String> {
+    // Disk write, so it never runs on the tokio worker (HANDOFF.md #2) —
+    // `spawn_blocking`, same doctrine as `list_project_files`. Errors are surfaced
+    // honestly to the caller rather than swallowed, so a failed save (e.g. a
+    // permissions error or a vanished directory) is visible to the user.
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::write(&path, content).map_err(|e| format!("Couldn't save {path}: {e}"))
+    })
+    .await
+    .map_err(|e| format!("The save didn't finish: {e}"))?
+}
+
 fn walk_project_files(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
     if depth > MAX_WALK_DEPTH || out.len() >= MAX_WALK_FILES {
         return;
@@ -3147,6 +3160,7 @@ pub fn run() {
             recent_projects,
             list_sessions,
             list_project_files,
+            save_text,
             search_sessions,
             open_project,
             window_project,

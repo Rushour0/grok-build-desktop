@@ -2,6 +2,14 @@
 
 <p align="center"><strong>Grok's coding agent — xAI's open-source <a href="https://github.com/xai-org/grok-build">Grok Build</a> — without the terminal.</strong></p>
 
+<p align="center">The clearest, safest, most native way to run Grok Build.</p>
+
+<p align="center">
+  <a href="https://github.com/Rushour0/grok-build-desktop/releases/latest"><img src="https://img.shields.io/github/v/release/Rushour0/grok-build-desktop" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Rushour0/grok-build-desktop" alt="License"></a>
+  <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-informational" alt="Platforms: macOS, Windows, Linux">
+</p>
+
 <p align="center">
   <a href="https://grok.rushour0.com"><img src="https://img.shields.io/badge/Download%20for%20macOS-111111?style=for-the-badge&logo=apple&logoColor=white" alt="Download Grok Build Desktop for macOS" height="46"></a>
 </p>
@@ -50,6 +58,12 @@ latest instead.)
   **split-view diff** — matching lines aligned across from each other, changed words
   highlighted, long unchanged stretches collapsed — behind an Allow/Deny gate. No approving
   edits blind from a terminal scrollback.
+- **Gives you the controls a terminal can't.** Expandable tool cards with syntax-highlighted
+  output, a command palette (Cmd/Ctrl+K) with slash commands and @-mention file autocomplete,
+  a Preferences panel with Light/Dark/System theme and model + reasoning-effort controls,
+  checkpoint/rewind to restore an earlier point in a conversation, a live Tasks panel for
+  spawned subagents and background work, and a one-click Markdown **receipt** you can copy or
+  save to share exactly what the agent did.
 
 <p align="center">
   <img src="docs/screenshots/launcher-dark.png" alt="The launcher — open a project folder, or reopen a recent one, with search across every past conversation" width="860">
@@ -157,6 +171,8 @@ Grok, or its own metadata, any new trust.
   before any file restore — v0.9.5
 - [x] Tasks panel — a live dashboard of the agent's spawned subagents and background/scheduled
   tasks, read from x.ai/session_notification events — v0.9.6
+- [x] Execution receipt — export the current run (prompts, answers, tool calls, diffs, plan,
+  token usage) as a shareable Markdown document, with a preview panel to copy or save it — v0.9.7
 
 Not yet, on the list:
 

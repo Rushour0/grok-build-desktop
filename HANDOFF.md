@@ -5,7 +5,7 @@ Agent Client Protocol (ACP) over the child's stdio, and forwards the live sessio
 webview. Independent and unofficial: it drives the upstream CLI at runtime and does not
 redistribute it. See `NOTICE`.
 
-Current version: **0.9.6**.
+Current version: **0.9.7**.
 
 ```text
 webview (React)  --invoke-->  Rust host  --stdin-->   grok agent stdio
@@ -188,6 +188,15 @@ deleted transcript mode (`.content-header`, `.content-actions`, `.history-state`
 - `recent_projects` no longer freezes the app on a stale network mount, but the list itself can
   hang.
 - Multi-word search is a literal **phrase**: "approval hook" won't match "hook for approval".
+- **Full worktree isolation is deferred, not shipped.** Running sessions against an isolated git
+  worktree instead of the user's working tree would be destructive-adjacent (it manipulates the
+  user's git state) and needs an explicit product decision plus live verification before it's
+  safe to build.
+- **Full MCP server management is deferred, not shipped.** Viewing/adding/removing MCP servers
+  from the app means writing to Grok's own config file and handling secrets — a materially
+  different trust boundary than the read-only Tools & Safety / Tasks surfaces already shipped
+  (see v0.9.3 and v0.9.6 above) — and likewise needs a decision plus live, non-headless
+  verification first.
 
 ## Roadmap
 
@@ -246,6 +255,18 @@ deleted transcript mode (`.content-header`, `.content-actions`, `.history-state`
    (viewing/adding/removing MCP servers from the app) is intentionally deferred**, not shipped
    here: it would mean the app writes to Grok's own config file and handles secrets, which is a
    materially different trust boundary than the read-only surfaces shipped so far.
+0g. **Shipped in v0.9.7 ("execution receipt export + launch package"):** a Receipt panel
+   (`export-receipt` in the command palette) that renders the current conversation — prompts,
+   agent answers, tool calls with status/read-only tag/duration, file diffs, the plan, and token
+   usage/model — as a shareable Markdown document (`src/lib/receipt.ts`, pure and unit-tested),
+   with Copy-to-clipboard and Save-to-file (a new additive `save_text` Tauri command,
+   `spawn_blocking`, following the async doctrine above) actions. Plus a launch-readiness pass on
+   README positioning/badges and a new `CHANGELOG.md`. **Full worktree isolation and full MCP
+   server management (viewing/adding/removing MCP servers from the app) remain intentionally
+   deferred past v0.9.7** — both are destructive or config-writing changes (worktree isolation
+   touches the user's git state; MCP management writes Grok's own config and handles secrets) that
+   need a product decision and live, non-headless verification before they can ship safely; see
+   Known limits below.
 1. The one refactor above (kills four bugs).
 2. ~~Surface grok's own capabilities — it advertises `available_commands`~~ — the slash-command
    piece is done (see 0a). Remaining: exposing `/compact`, `/context`, `/session-info`, and

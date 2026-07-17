@@ -53,6 +53,7 @@ import { MessageActions } from "./MessageActions";
 import { RewindPanel } from "./RewindPanel";
 import { normalizeRewindPoints, type RewindMode } from "./lib/rewind";
 import { TasksPanel } from "./TasksPanel";
+import { ReceiptPanel } from "./ReceiptPanel";
 import { parseNotify, mergeTask, type TaskItem } from "./lib/notify";
 import { filterSlash, filterFiles, detectTrigger, applyPick } from "./lib/commands";
 import { isThemePref, applyTheme, type ThemePref } from "./lib/theme";
@@ -482,6 +483,10 @@ export default function App() {
   // the active tab's `tasks`, floating over whatever screen is showing, same
   // idiom as `prefsOpen` above.
   const [tasksOpen, setTasksOpen] = useState(false);
+  // The Receipt overlay (command palette action) — a shareable Markdown export
+  // of the active tab's transcript, floating over whatever screen is showing,
+  // same idiom as `prefsOpen`/`tasksOpen` above.
+  const [receiptOpen, setReceiptOpen] = useState(false);
   // The CLI's `--version` output, fetched lazily the first time Preferences'
   // About section is opened and cached here so re-opening it doesn't re-spawn
   // the subprocess every time.
@@ -1794,8 +1799,16 @@ export default function App() {
         run: () => closeTab(activeTabId),
       });
     }
+    if (activeTab?.items?.length) {
+      actions.push({
+        id: "export-receipt",
+        title: "Export receipt…",
+        keywords: "receipt export markdown share save",
+        run: () => setReceiptOpen(true),
+      });
+    }
     return actions;
-  }, [sidebarOpen, activeTabId]);
+  }, [sidebarOpen, activeTabId, activeTab]);
 
   // Gate the effort picker on grok having actually advertised an effort/model
   // slash command *for this session* — there's no dedicated RPC to change it,
@@ -2344,6 +2357,14 @@ export default function App() {
         onConfirm={(pointId, mode) => void confirmRewind(pointId, mode)}
       />
       <TasksPanel open={tasksOpen} onClose={() => setTasksOpen(false)} tasks={activeTab?.tasks ?? []} />
+      <ReceiptPanel
+        open={receiptOpen}
+        onClose={() => setReceiptOpen(false)}
+        items={activeTab?.items ?? []}
+        sessionInfo={activeTab?.sessionInfo}
+        title={activeTab?.title ?? undefined}
+        cwd={activeTab?.cwd}
+      />
     </div>
   );
 }
