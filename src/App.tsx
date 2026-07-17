@@ -65,6 +65,12 @@ interface UsageItem {
 }
 type Item = ToolItem | TextItem | AskItem | PlanItem | UsageItem;
 
+/// Where a sign-in is up to. Rust only ever tells us the *outcome* (`acp-auth` is
+/// `ok | failed | timed_out`), so every in-flight state below is ours alone:
+/// `contacting` and `browser` are split by our own 1.5s timer, and `opening` is
+/// the post-auth `openSession` wait — a stage no backend knows about.
+type AuthPending = "contacting" | "browser" | "opening" | null;
+
 interface Tab {
   id: string;
   cwd: string | null;
@@ -76,6 +82,18 @@ interface Tab {
   usageTokens: number;
   needsAuth: boolean;
   authMethods: AuthMethod[];
+  /// A connect/open-session is in flight for this tab. The promise still decides
+  /// the outcome; this only decides whether we show that we're waiting.
+  connecting: boolean;
+  /// Copy for the newest recognized `acp-connect` stage. Decoration, never state.
+  connectLine: string | null;
+  /// The ~400ms and ~3s gates: a wait too short to notice shouldn't be narrated.
+  connectShowLine: boolean;
+  connectShowCancel: boolean;
+  authPending: AuthPending;
+  /// This tab's own failure — folder open, connect, or sign-in. Kept per-tab so a
+  /// folder error can never surface on another tab's screen.
+  error: string | null;
 }
 
 let nextTabId = 1;
@@ -93,8 +111,34 @@ function createTab(): Tab {
     usageTokens: 0,
     needsAuth: false,
     authMethods: [],
+    connecting: false,
+    connectLine: null,
+    connectShowLine: false,
+    connectShowCancel: false,
+    authPending: null,
+    error: null,
   };
 }
+
+/// `acp-connect` stages are verbatim, non-exhaustive labels. Anything not in this
+/// table simply doesn't render: an unknown stage is a missing sentence, not a bug.
+/// `failed` is absent on purpose — the rejected promise owns every error message.
+const CONNECT_COPY: Record<string, string> = {
+  spawning: "Starting Grok Build…",
+  handshaking: "Connecting to Grok Build…",
+  needs_auth: "Checking your sign-in…",
+  session: "Opening your project…",
+  ready: "Almost ready…",
+};
+
+/// The installer's stages, mapped from its own stderr. No byte counts and no
+/// percentage: nothing here reports a total, so any number would be invented.
+const INSTALL_COPY: Record<string, string> = {
+  resolving: "Finding the latest version…",
+  downloading: "Downloading Grok Build…",
+  configuring: "Setting up your PATH…",
+  installing: "Installing…",
+};
 
 function itemId(prefix: string): string {
   return `${prefix}-${nextItemId++}`;
@@ -211,6 +255,25 @@ function reduceUpdates(updates: SessionUpdate[]): Item[] {
   ).items;
 }
 
+/// The connect line, or null while there's nothing worth saying: before the 400ms
+/// gate, or once the promise has settled. Falls back to a generic line because
+/// `acp-connect` is decoration and may never arrive.
+function connectLineFor(tab: Tab): string | null {
+  if (!tab.connecting || !tab.connectShowLine) return null;
+  return tab.connectLine ?? "Connecting to your project…";
+}
+
+/// What the sign-in screen is waiting on. `contacting` says nothing on purpose —
+/// under 1.5s there's nothing to report and a flash would be noise.
+function authLine(tab: Tab): string | null {
+  if (tab.authPending === "browser") return "A browser window will open — finish signing in there.";
+  // `finishSignIn` arms `beginConnect` in the same breath as `opening`, so this
+  // fallback covers the 400ms before the gate opens. It has to be the line the
+  // gate then falls back to, or the wait renames itself mid-flight.
+  if (tab.authPending === "opening") return connectLineFor(tab) ?? "Connecting to your project…";
+  return null;
+}
+
 function sessionDate(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
@@ -228,6 +291,7 @@ export default function App() {
   const [historyQuery, setHistoryQuery] = useState("");
   const [historySearchIds, setHistorySearchIds] = useState<string[]>([]);
   const [historySearching, setHistorySearching] = useState(false);
+  const [historySearchError, setHistorySearchError] = useState<string | null>(null);
   const [historySession, setHistorySession] = useState<SessionMeta | null>(null);
   const [historyItems, setHistoryItems] = useState<Item[]>([]);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
@@ -236,9 +300,17 @@ export default function App() {
   const [historyRevision, setHistoryRevision] = useState(0);
   const [update, setUpdate] = useState<Update | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [installLine, setInstallLine] = useState<string | null>(null);
+  const [installDetail, setInstallDetail] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const transcriptRequest = useRef(0);
+  // A warm sign-in returns in well under a second. Wait 1.5s before promising a
+  // browser window, so re-authenticating an already-valid login doesn't flash
+  // instructions for something that never happens.
+  const authTimers = useRef<Map<string, number>>(new Map());
+  // The 400ms line gate and the 3s Cancel gate, per tab.
+  const connectTimers = useRef<Map<string, number[]>>(new Map());
   const tabsRef = useRef(tabs);
   const addRunRef = useRef<() => Promise<void>>(async () => {});
   // Chunks stream in one fragment at a time; keep appending to the same bubble
@@ -264,6 +336,75 @@ export default function App() {
     },
     [activeTabId, updateTab],
   );
+
+  const clearAuthTimer = useCallback((tabId: string) => {
+    const timer = authTimers.current.get(tabId);
+    if (timer !== undefined) window.clearTimeout(timer);
+    authTimers.current.delete(tabId);
+  }, []);
+
+  const clearConnectTimers = useCallback((tabId: string) => {
+    connectTimers.current.get(tabId)?.forEach((timer) => window.clearTimeout(timer));
+    connectTimers.current.delete(tabId);
+  }, []);
+
+  /// Start showing that we're waiting. The `connect`/`openSession` promise is
+  /// still what decides the outcome — this only arms the two gates.
+  const beginConnect = useCallback(
+    (tabId: string) => {
+      clearConnectTimers(tabId);
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        connecting: true,
+        connectLine: null,
+        connectShowLine: false,
+        connectShowCancel: false,
+        error: null,
+      }));
+      connectTimers.current.set(tabId, [
+        // A warm connect beats this; a line that appears and vanishes inside
+        // 400ms reads as a glitch, not as progress.
+        window.setTimeout(
+          () => updateTab(tabId, (tab) => (tab.connecting ? { ...tab, connectShowLine: true } : tab)),
+          400,
+        ),
+        // Cancel exists to escape a wait, so it shows up once there is one.
+        window.setTimeout(
+          () => updateTab(tabId, (tab) => (tab.connecting ? { ...tab, connectShowCancel: true } : tab)),
+          3000,
+        ),
+      ]);
+    },
+    [clearConnectTimers, updateTab],
+  );
+
+  const endConnect = useCallback(
+    (tabId: string) => {
+      clearConnectTimers(tabId);
+      updateTab(tabId, (tab) => ({
+        ...tab,
+        connecting: false,
+        connectLine: null,
+        connectShowLine: false,
+        connectShowCancel: false,
+      }));
+    },
+    [clearConnectTimers, updateTab],
+  );
+
+  // `closeTab` clears a tab's timers, but a tab that is still open when the app
+  // goes away never passes through it. Clear every armed timer, not just the
+  // active tab's, so nothing is left to fire into a component that's gone.
+  useEffect(() => {
+    const pendingAuth = authTimers.current;
+    const pendingConnect = connectTimers.current;
+    return () => {
+      pendingAuth.forEach((timer) => window.clearTimeout(timer));
+      pendingAuth.clear();
+      pendingConnect.forEach((timers) => timers.forEach((timer) => window.clearTimeout(timer)));
+      pendingConnect.clear();
+    };
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -308,6 +449,7 @@ export default function App() {
     if (stage !== "ready" && stage !== "chat") return;
     const query = historyQuery.trim();
     setHistorySearchIds([]);
+    setHistorySearchError(null);
     if (!query) {
       setHistorySearching(false);
       return;
@@ -318,10 +460,19 @@ export default function App() {
     const timer = window.setTimeout(() => {
       searchSessions(query)
         .then((ids) => {
-          if (!cancelled) setHistorySearchIds(ids);
+          if (!cancelled) {
+            setHistorySearchIds(ids);
+            setHistorySearchError(null);
+          }
         })
-        .catch(() => {
-          if (!cancelled) setHistorySearchIds([]);
+        .catch((error) => {
+          // A failed search is not an empty search. Silently falling back to the
+          // local title filter told the user "No matches" — a flat lie about
+          // conversations that are sitting right there on disk.
+          if (!cancelled) {
+            setHistorySearchIds([]);
+            setHistorySearchError(`Couldn't search conversation contents: ${error}`);
+          }
         })
         .finally(() => {
           if (!cancelled) setHistorySearching(false);
@@ -490,9 +641,98 @@ export default function App() {
     [appendText, updateTab],
   );
 
+  /// The other half of `authenticate`. Sign-in is now fire-and-forget in Rust, so
+  /// the promise resolving means "the request is on the wire" — not "you're signed
+  /// in". Only `acp-auth {status:"ok"}` means that, which is why opening the
+  /// session and entering the chat live here and nowhere else.
+  const finishSignIn = useCallback(
+    async (tabId: string) => {
+      const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+      if (!tab) return;
+      if (!tab.cwd) {
+        updateTab(tabId, (current) => ({
+          ...current,
+          authPending: null,
+          error: null,
+          needsAuth: false,
+          authMethods: [],
+        }));
+        setStage("chat");
+        return;
+      }
+      // Hold the sign-in screen — with a live line — across `openSession` rather
+      // than cutting to a chat that can't accept a prompt yet. Same reason
+      // `needsAuth` stays true until there's a session to show.
+      updateTab(tabId, (current) => ({ ...current, authPending: "opening", error: null }));
+      beginConnect(tabId);
+      try {
+        const sessionId = await openSession(tabId, tab.cwd);
+        if (!tabsRef.current.some((candidate) => candidate.id === tabId)) return;
+        updateTab(tabId, (current) => ({
+          ...current,
+          sessionId,
+          needsAuth: false,
+          authMethods: [],
+          authPending: null,
+          error: null,
+        }));
+        setStage("chat");
+      } catch (e) {
+        updateTab(tabId, (current) => ({ ...current, authPending: null, error: String(e) }));
+      } finally {
+        endConnect(tabId);
+      }
+    },
+    [beginConnect, endConnect, updateTab],
+  );
+
   useEffect(() => {
     const off = subscribe({
       onUpdate,
+      onAuth: (tabId, auth) => {
+        if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
+        clearAuthTimer(tabId);
+        if (auth.status === "ok") {
+          // Late-ok-wins: Cancel is client-side, so a sign-in the user "cancelled"
+          // can still land. It really happened — grok wrote the credentials — and
+          // sending them back to a sign-in button would be the dishonest branch.
+          void finishSignIn(tabId);
+          return;
+        }
+        const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+        // Already cancelled: don't overwrite that copy with a stale failure.
+        if (!tab?.authPending) return;
+        updateTab(tabId, (current) => ({
+          ...current,
+          authPending: null,
+          error:
+            auth.status === "timed_out"
+              ? "Sign-in timed out. If you finished in the browser, try again — it may already be done."
+              : auth.message ?? "Sign-in failed.",
+        }));
+      },
+      onConnect: (tabId, event) => {
+        if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
+        const line = CONNECT_COPY[event.stage];
+        // Stages are decoration and the list is open-ended: an unrecognized one
+        // leaves the previous line alone rather than blanking or breaking it.
+        if (!line) return;
+        updateTab(tabId, (tab) => (tab.connecting ? { ...tab, connectLine: line } : tab));
+      },
+      onInstall: (event) => {
+        if (event.status === "started") {
+          setInstallLine(INSTALL_COPY.installing);
+          setInstallDetail(null);
+        } else if (event.status === "stage") {
+          setInstallLine(INSTALL_COPY[event.stage ?? ""] ?? INSTALL_COPY.installing);
+          setInstallDetail(event.detail ?? null);
+        } else {
+          // done and failed both end the run; `doInstall`'s own catch owns the
+          // error copy, so there's nothing left for a status line to say.
+          setInstallLine(null);
+          setInstallDetail(null);
+        }
+      },
       onPermission: (tabId, req) => {
         if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
         openBubbles.current.set(tabId, {});
@@ -551,7 +791,7 @@ export default function App() {
     return () => {
       off.then((fn) => fn());
     };
-  }, [onUpdate, updateTab]);
+  }, [clearAuthTimer, finishSignIn, onUpdate, updateTab]);
 
   async function decide(tab: Tab, item: AskItem, optionId: string | null, label: string) {
     // Hook-gated requests (the path that fires today) go back through respondHook;
@@ -570,12 +810,17 @@ export default function App() {
   async function doInstall() {
     setStage("installing");
     setNotice(null);
+    setInstallLine(INSTALL_COPY.installing);
+    setInstallDetail(null);
     try {
       await installGrok();
       setStage("ready");
     } catch (e) {
       setNotice(String(e));
       setStage("needs-install");
+    } finally {
+      setInstallLine(null);
+      setInstallDetail(null);
     }
   }
 
@@ -592,8 +837,12 @@ export default function App() {
   }
 
   async function openFolder(tabId: string, path: string) {
+    // Connect no longer freezes the UI, which means the button is now clickable
+    // while it runs. Mirrors submit()'s `if (!text || tab.busy) return;` —
+    // without it a double-click spawns a second grok the first one never releases.
+    if (tabsRef.current.find((tab) => tab.id === tabId)?.connecting) return;
     closeTranscript();
-    setNotice(null);
+    beginConnect(tabId);
     try {
       const res = await connect(tabId, path);
       if (!tabsRef.current.some((tab) => tab.id === tabId)) {
@@ -607,12 +856,15 @@ export default function App() {
         attachments: [],
         needsAuth: res.needs_auth,
         authMethods: res.auth_methods,
+        error: null,
       }));
       setDragging(false);
       setHistoryRevision((revision) => revision + 1);
       setStage("chat");
     } catch (e) {
-      setNotice(String(e));
+      updateTab(tabId, (tab) => ({ ...tab, error: String(e) }));
+    } finally {
+      endConnect(tabId);
     }
   }
 
@@ -646,23 +898,39 @@ export default function App() {
 
   addRunRef.current = addRun;
 
-  async function signIn(tab: Tab, methodId: string) {
-    setNotice("A browser window will open — finish signing in there.");
-    try {
-      await authenticate(tab.id, methodId);
-      if (!tabsRef.current.some((candidate) => candidate.id === tab.id)) return;
-      const sessionId = tab.cwd ? await openSession(tab.id, tab.cwd) : tab.sessionId;
-      updateTab(tab.id, (current) => ({
-        ...current,
-        sessionId,
-        needsAuth: false,
-        authMethods: [],
-      }));
-      setNotice(null);
-      setStage("chat");
-    } catch (e) {
-      setNotice(String(e));
-    }
+  /// Kicks off a sign-in and returns. The outcome arrives as `acp-auth` and is
+  /// handled in `finishSignIn` — awaiting `authenticate` here would only tell us
+  /// the request was sent, and treating that as success is how the app used to
+  /// walk into an unauthenticated chat.
+  function signIn(tab: Tab, methodId: string) {
+    if (tab.authPending) return;
+    updateTab(tab.id, (current) => ({ ...current, authPending: "contacting", error: null }));
+    clearAuthTimer(tab.id);
+    authTimers.current.set(
+      tab.id,
+      window.setTimeout(() => {
+        authTimers.current.delete(tab.id);
+        updateTab(tab.id, (current) =>
+          current.authPending === "contacting" ? { ...current, authPending: "browser" } : current,
+        );
+      }, 1500),
+    );
+    authenticate(tab.id, methodId).catch((e) => {
+      clearAuthTimer(tab.id);
+      updateTab(tab.id, (current) => ({ ...current, authPending: null, error: String(e) }));
+    });
+  }
+
+  /// Cancel is ours alone: grok is waiting on a human in a browser and has no way
+  /// to be told to stop. So we stop listening, and say exactly that. If the
+  /// sign-in lands anyway, `onAuth` takes it.
+  function cancelSignIn(tabId: string) {
+    clearAuthTimer(tabId);
+    updateTab(tabId, (current) => ({
+      ...current,
+      authPending: null,
+      error: "Cancelled — you can sign in again.",
+    }));
   }
 
   async function submit() {
@@ -701,6 +969,8 @@ export default function App() {
     setTabs(nextTabs);
     openBubbles.current.delete(tabId);
     planIds.current.delete(tabId);
+    clearAuthTimer(tabId);
+    clearConnectTimers(tabId);
     if (activeTabId === tabId) {
       setActiveTabId(nextTabs[Math.min(index, nextTabs.length - 1)]?.id ?? null);
     }
@@ -746,8 +1016,9 @@ export default function App() {
         line="Grok Build isn't on this computer yet. We'll install it for you — no terminal needed."
       >
         <button className="primary" onClick={doInstall} disabled={stage === "installing"}>
-          {stage === "installing" ? "Installing…" : "Install Grok Build"}
+          {stage === "installing" ? "Installing…" : notice ? "Try again" : "Install Grok Build"}
         </button>
+        <Progress line={stage === "installing" ? installLine : null} detail={installDetail} />
         {notice && <p className="notice error">{notice}</p>}
       </Splash>
     );
@@ -794,6 +1065,10 @@ export default function App() {
             aria-label="Search conversations"
           />
           <div className="side-list">
+            {/* Above the list, not inside the empty-state branch: a broken content
+                search still leaves the local title matches standing, and those are
+                the deceptive case — a short list that looks like the whole answer. */}
+            {historySearchError && <div className="side-state error">{historySearchError}</div>}
             {historyLoading && historySessions.length === 0 && (
               <div className="side-state">Loading conversations…</div>
             )}
@@ -802,7 +1077,14 @@ export default function App() {
               !historyListError &&
               filteredSessions.length === 0 && (
                 <div className="side-state">
-                  {query ? (historySearching ? "Searching…" : "No matches") : "No conversations yet"}
+                  {query
+                    ? historySearching
+                      ? "Searching…"
+                      : // Only titles were actually searched, so that's all we claim.
+                        historySearchError
+                        ? "No title matches"
+                        : "No matches"
+                    : "No conversations yet"}
                 </div>
               )}
             {(!historyLoading || historySessions.length > 0) &&
@@ -891,11 +1173,26 @@ export default function App() {
                   <h1>Sign in to continue</h1>
                   <p>Grok needs you signed in before it can work on this project.</p>
                   {activeTab.authMethods.map((method) => (
-                    <button key={method.id} className="primary" onClick={() => signIn(activeTab, method.id)}>
+                    <button
+                      key={method.id}
+                      className="primary"
+                      onClick={() => signIn(activeTab, method.id)}
+                      disabled={Boolean(activeTab.authPending)}
+                    >
                       {method.description ?? `Sign in with ${method.name}`}
                     </button>
                   ))}
-                  {notice && <p className="notice">{notice}</p>}
+                  <Progress
+                    line={authLine(activeTab)}
+                    onCancel={
+                      activeTab.authPending === "browser"
+                        ? () => cancelSignIn(activeTab.id)
+                        : activeTab.authPending === "opening" && activeTab.connectShowCancel
+                          ? () => void cancelRun(activeTab.id).catch(() => {})
+                          : undefined
+                    }
+                  />
+                  {activeTab.error && <p className="notice error">{activeTab.error}</p>}
                 </div>
               ) : activeTab?.cwd ? (
                 <>
@@ -941,6 +1238,17 @@ export default function App() {
                         <span />
                       </div>
                     )}
+                    {/* A tab that already has a cwd can still be reconnecting —
+                        "Open folder…" on an open tab lands here, not in the
+                        empty state. */}
+                    <Progress
+                      line={connectLineFor(activeTab)}
+                      onCancel={
+                        activeTab.connectShowCancel
+                          ? () => void cancelRun(activeTab.id).catch(() => {})
+                          : undefined
+                      }
+                    />
                   </div>
 
                   <form
@@ -1012,6 +1320,15 @@ export default function App() {
                   <button className="primary" onClick={() => pickFolder(activeTab?.id)}>
                     Choose a folder…
                   </button>
+                  <Progress
+                    line={activeTab ? connectLineFor(activeTab) : null}
+                    onCancel={
+                      activeTab?.connectShowCancel
+                        ? () => void cancelRun(activeTab.id).catch(() => {})
+                        : undefined
+                    }
+                  />
+                  {activeTab?.error && <p className="notice error">{activeTab.error}</p>}
                   {notice && <p className="notice error">{notice}</p>}
                 </div>
               )}
@@ -1204,6 +1521,52 @@ function Splash({
       <p>{line}</p>
       {children}
     </main>
+  );
+}
+
+/// The app's only progress surface: the existing `.working` pulse over a live
+/// status line. Indeterminate on purpose — nothing we wait on (a sign-in a human
+/// is doing in a browser, an installer that never reports a total, a handshake)
+/// has an honestly knowable end, so there is no bar and no percentage to show.
+///
+/// Hosts mount this unconditionally and toggle `line` instead: a `role="status"`
+/// region inserted into the DOM already populated is generally not announced, so
+/// mounting-on-demand would silently cost us the announcement. `detail` is
+/// verbatim backend text and stays `aria-hidden` — the coarse line alone is worth
+/// interrupting someone for, and `role="status"` implies `aria-atomic`.
+function Progress({
+  line,
+  detail,
+  error,
+  onCancel,
+}: {
+  line: string | null;
+  detail?: string | null;
+  error?: boolean;
+  onCancel?: () => void;
+}) {
+  return (
+    <div className="progress" role="status" aria-live="polite">
+      {/* Nothing is in flight once it has failed, so the pulse stops with it. */}
+      {line && !error && (
+        <div className="working">
+          <span />
+          <span />
+          <span />
+        </div>
+      )}
+      {line && <p className={error ? "notice error" : "notice"}>{line}</p>}
+      {line && detail && (
+        <p className="progress-detail" aria-hidden="true">
+          {detail}
+        </p>
+      )}
+      {line && onCancel && (
+        <button className="ghost" onClick={onCancel}>
+          Cancel
+        </button>
+      )}
+    </div>
   );
 }
 

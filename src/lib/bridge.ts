@@ -128,6 +128,37 @@ export interface TurnEnd {
   };
 }
 
+/// Terminal outcome of a sign-in attempt. `authenticate` resolves immediately now,
+/// so this event — not the promise — is the completion signal. The wire enum is
+/// exactly these three: the in-flight `contacting`/`browser` states are owned by
+/// the frontend's own timer, never emitted by Rust.
+export interface AcpAuth {
+  tabId: string;
+  status: "ok" | "failed" | "timed_out";
+  message?: string;
+  email?: string;
+  subscriptionTier?: string;
+}
+
+/// Text-only decoration for a connect/open-session in flight. The `connect` and
+/// `openSession` promises remain the source of truth; `stage` is a verbatim,
+/// non-exhaustive label and must never be switched on for state.
+export interface AcpConnect {
+  tabId: string;
+  stage: string;
+  sessionId?: string;
+  message?: string;
+}
+
+/// Install progress. Unlike the other two this is **global** — there is at most
+/// one install and it carries no `tabId`. `detail` is a verbatim installer line;
+/// `stage` is decorative.
+export interface InstallEvent {
+  status: "started" | "stage" | "done" | "failed";
+  stage?: string;
+  detail?: string;
+}
+
 // ---- events (Rust -> webview) ----
 
 type Handlers = {
@@ -136,6 +167,9 @@ type Handlers = {
   onTurnEnd: (tabId: string, result: TurnEnd) => void;
   onError: (tabId: string, message: string) => void;
   onClosed: (tabId: string) => void;
+  onAuth?: (tabId: string, a: AcpAuth) => void;
+  onConnect?: (tabId: string, c: AcpConnect) => void;
+  onInstall?: (e: InstallEvent) => void;
 };
 
 /// Subscribe to the agent stream. Returns a disposer that detaches every listener.
@@ -154,6 +188,9 @@ export async function subscribe(h: Handlers): Promise<UnlistenFn> {
       e.payload && h.onError(e.payload.tabId, e.payload.message ?? "Something went wrong"),
     ),
     listen<{ tabId: string }>("acp-closed", (e) => e.payload && h.onClosed(e.payload.tabId)),
+    listen<AcpAuth>("acp-auth", (e) => e.payload && h.onAuth?.(e.payload.tabId, e.payload)),
+    listen<AcpConnect>("acp-connect", (e) => e.payload && h.onConnect?.(e.payload.tabId, e.payload)),
+    listen<InstallEvent>("acp-install", (e) => e.payload && h.onInstall?.(e.payload)),
   ]);
   return () => offs.forEach((off) => off());
 }

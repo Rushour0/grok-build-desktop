@@ -771,6 +771,37 @@ button.tab-add {
   }
 }
 
+/* ---- indeterminate progress: the .working pulse over a live status line ---- */
+
+.progress {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  margin-top: 0.75rem;
+}
+/* The chat stream is a left-aligned column, and the bare `.working` pulse a turn
+   renders sits at its left edge. Centering here would put the same pulse in two
+   different places in one container. */
+.stream > .progress {
+  align-items: flex-start;
+}
+/* Hosts mount this unconditionally (see `Progress`), so when there's nothing to
+   say it must cost nothing: no line, no margin. */
+.progress:empty {
+  margin-top: 0;
+}
+/* Verbatim backend text: unknown length, so clip rather than reflow the host. */
+.progress-detail {
+  max-width: 52ch;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- composer ---- */
 
 .drop-overlay {
