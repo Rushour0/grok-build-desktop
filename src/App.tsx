@@ -720,6 +720,29 @@ export default function App() {
     };
   }, [activeTab?.cwd, activeTab?.id, stage, updateTab]);
 
+  // Cmd/Ctrl+W closes the active tab, browser-style. When it takes the window's last tab
+  // with it — or when there's no tab to close (a launcher) — there's nothing left in the
+  // window worth keeping open, so the window closes too. That's what Cmd+W does everywhere
+  // else; leaving an empty "nothing open" shell behind would be the surprising outcome.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.key !== "w" && event.key !== "W") return;
+      event.preventDefault();
+      const openTab = activeTabId;
+      if (openTab && tabsRef.current.length > 1) {
+        closeTab(openTab);
+        return;
+      }
+      // Last tab, or nothing open: close the window itself. `cancel` best-effort stops this
+      // window's grok before the close event races the teardown.
+      if (openTab) void cancelRun(openTab).catch(() => {});
+      void getCurrentWebviewWindow().close().catch(() => {});
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeTabId]);
+
   /// The banner's Update button. Updating restarts the whole app, which takes
   /// every window's agent down with it — so count them first and say so. Still an
   /// offer, not a block: refusing to update while anything is running is exactly
@@ -1401,8 +1424,24 @@ export default function App() {
   }
   const activeSessionId = activeTab?.sessionId ?? activeTab?.loadingSessionId ?? null;
 
+  // Which answer bubble is streaming right now, for the live caret. It's the last item while
+  // the tab is busy, and only an answer: the reducer keeps the open answer as the last item
+  // until a tool call, plan, permission, or turn-end closes it (the same points that reset
+  // `openBubbles`), so this mirrors that state without reading the ref during render.
+  const lastItem = activeTab?.items[activeTab.items.length - 1];
+  const streamingId =
+    activeTab?.busy && lastItem && isText(lastItem) && lastItem.kind === "answer"
+      ? lastItem.id
+      : null;
+
   return (
     <div className="shell">
+      {/* The window's own drag handle. With `titleBarStyle: Overlay` the OS titlebar is gone
+          and content reaches the top edge, so this thin strip is what you grab to move the
+          window — and it's left-padded to clear the traffic lights. Deliberately empty: the
+          Plan warned that making the button-dense tab strip a drag surface is where dragging
+          breaks, so the drag region is its own bar and nothing interactive lives on it. */}
+      <div className="titlebar" data-tauri-drag-region />
       {banner}
       <div className="shell-body">
         <aside className="sidebar">
@@ -1635,6 +1674,7 @@ export default function App() {
                     )}
                     <TranscriptItems
                       items={activeTab.items}
+                      streamingId={streamingId}
                       onDecide={(item, optionId, label) => decide(activeTab, item, optionId, label)}
                     />
                     {activeTab.busy && (
@@ -1785,10 +1825,12 @@ function MarkdownTable({ children }: { children?: React.ReactNode }) {
 /// Grok's output is untrusted: it routinely echoes file contents back, and a file
 /// can hold `<script>` or `<img onerror=…>`. This webview can invoke commands that
 /// touch the filesystem and spawn processes, so rendering that HTML would be remote
-/// code execution, not a defaced page — and `tauri.conf.json` sets `"csp": null`,
-/// so there is no second net under this one.
+/// code execution, not a defaced page. `tauri.conf.json` does ship a strict CSP
+/// (`script-src 'self'`, `img-src 'self'`, …), but that only stops script execution and
+/// remote fetches — it does nothing about `<base>`/`<form>` repointing the app's own
+/// relative URLs, so the CSP is the second net, not the first.
 ///
-/// `disableParsingRawHTML` is what makes that safe: raw HTML is escaped to text
+/// `disableParsingRawHTML` is the first net: raw HTML is escaped to text
 /// instead of being transcribed into elements. It is load-bearing and not
 /// belt-and-braces — with it off, `<base href>` and `<form action>` in agent output
 /// render as live elements, and a `<base>` tag silently repoints every relative URL
@@ -1837,9 +1879,13 @@ const RENDERS_MARKDOWN: ReadonlySet<TextItem["kind"]> = new Set(["answer", "thou
 
 function TranscriptItems({
   items,
+  streamingId,
   onDecide,
 }: {
   items: Item[];
+  /// The id of the answer bubble currently streaming, or null. Only decides whether this
+  /// bubble wears the live caret — a class add, never a change to its entrance animation.
+  streamingId?: string | null;
   onDecide?: (i: AskItem, optionId: string | null, label: string) => void;
 }) {
   return items.map((item) => {
@@ -1855,8 +1901,9 @@ function TranscriptItems({
     if (isPlan(item)) return <PlanCard key={item.id} entries={item.entries} />;
     if (isUsage(item)) return <UsageLine key={item.id} item={item} />;
     const markdown = RENDERS_MARKDOWN.has(item.kind);
+    const streaming = item.id === streamingId ? " streaming" : "";
     return (
-      <div key={item.id} className={`bubble ${item.kind}${markdown ? " md" : ""}`}>
+      <div key={item.id} className={`bubble ${item.kind}${markdown ? " md" : ""}${streaming}`}>
         {markdown ? <MarkdownText text={item.text} /> : item.text}
       </div>
     );
@@ -2003,6 +2050,9 @@ function Splash({
 }) {
   return (
     <main className="splash">
+      {/* Same drag handle as the shell — the overlay titlebar means even the splash needs
+          its own way to move the window. Absolute so it doesn't shift the centered content. */}
+      <div className="titlebar titlebar-float" data-tauri-drag-region />
       {banner}
       <div className="mark" />
       <h1>{title}</h1>
