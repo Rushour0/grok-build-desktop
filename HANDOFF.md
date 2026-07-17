@@ -1,120 +1,207 @@
 # Grok Build Desktop: engineer handoff
 
-## Overview
+A Tauri 2 desktop GUI around xAI's `grok` CLI. The Rust host spawns `grok agent stdio`, speaks
+Agent Client Protocol (ACP) over the child's stdio, and forwards the live session to a React
+webview. Independent and unofficial: it drives the upstream CLI at runtime and does not
+redistribute it. See `NOTICE`.
 
-Grok Build Desktop is a Tauri v2 desktop GUI around xAI's `grok` CLI. The Rust host starts `grok agent stdio`, speaks Agent Client Protocol (ACP) over the child process's stdio, and forwards the live session to a React webview. It is intended for people who want to use Grok Build on a project folder without operating the terminal CLI directly.
-
-Current version: **0.1.1**.
-
-This is an independent, unofficial wrapper. It downloads and drives the upstream CLI at runtime; it does not redistribute it. See `NOTICE` for attribution and trademark details.
-
-## Architecture
+Current version: **0.8.8**.
 
 ```text
 webview (React)  --invoke-->  Rust host  --stdin-->   grok agent stdio
 webview (React)  <--emit----  Rust host  <--stdout--  grok agent stdio
 ```
 
-There is no local web server. `src/lib/bridge.ts` is the typed webview-side transport, and the entire Rust process/ACP bridge is in `src-tauri/src/lib.rs`.
+No local web server. `src/lib/bridge.ts` is the typed webview transport; the whole Rust/ACP
+bridge is `src-tauri/src/lib.rs`. ACP is newline-delimited JSON-RPC 2.0.
 
-ACP is newline-delimited JSON-RPC 2.0 (one JSON message per line) over stdin/stdout. Initialization advertises `protocolVersion: 1` and disables client filesystem capabilities:
+---
 
-```json
-{
-  "protocolVersion": 1,
-  "clientCapabilities": {
-    "fs": {
-      "readTextFile": false,
-      "writeTextFile": false
-    }
-  }
-}
-```
+## The three things that will bite you
 
-New sessions are requested with `cwd` and an empty `mcpServers` list. The Rust reader routes JSON-RPC responses to pending callers; it emits session updates, permission requests, turn completion, errors, stderr, and process closure to the webview as `acp-*` events.
+Read this section before changing anything. Each one is a real failure this codebase already
+had, and each is invisible until it isn't.
 
-### Tauri commands
+### 1. A denylist does not hold. The allowlist is the architecture.
 
-The command signatures and behavior below match `src-tauri/src/lib.rs`.
+Verified experimentally against grok 0.2.101, and still the reason `READONLY_TOOLS` is shaped
+as it is:
 
-| Command | Rust signature | Purpose |
-| --- | --- | --- |
-| `grok_installed` | `fn grok_installed() -> bool` | Resolves the `grok` executable from known install locations or `PATH`. |
-| `auth_status` | `fn auth_status() -> AuthStatus` | Reports whether Grok is installed, its resolved path, and whether `~/.grok/auth.json` exists. |
-| `install_grok` | `fn install_grok(app: AppHandle) -> Result<String, String>` | Runs xAI's official shell or PowerShell installer, emits install status, and returns the resolved executable path. |
-| `recent_projects` | `fn recent_projects() -> Vec<Project>` | Reads valid project directories from `~/.grok/sessions`, sorts them by session-directory modification time, and returns up to 50. |
-| `connect` | `fn connect(app: AppHandle, state: State<AcpState>, cwd: String) -> Result<ConnectResult, String>` | Replaces any live child, starts `grok agent stdio` in `cwd`, initializes ACP, and opens a session or reports that authentication is required. |
-| `authenticate` | `fn authenticate(state: State<AcpState>, method_id: String) -> Result<(), String>` | Sends ACP `authenticate` for the selected method and waits up to five minutes for browser sign-in. |
-| `open_session` | `fn open_session(state: State<AcpState>, cwd: String) -> Result<String, String>` | Sends `session/new` after authentication and returns the new session ID. |
-| `respond_permission` | `fn respond_permission(state: State<AcpState>, request_id: i64, option_id: Option<String>) -> Result<(), String>` | Answers a pending ACP permission request with the selected option, or cancellation when the option is `None`. This path is currently unreachable; see below. |
-| `send_prompt` | `fn send_prompt(app: AppHandle, state: State<AcpState>, text: String) -> Result<(), String>` | Sends a text-only `session/prompt`, returns immediately, and emits streamed updates plus eventual turn completion or error. |
-| `cancel` | `fn cancel(state: State<AcpState>) -> Result<(), String>` | Best-effort sends `session/cancel`, then kills and reaps the child process. |
+- A hook denying `write`, `search_replace`, and `run_terminal_command` **failed**. Grok routed
+  around it *in the same turn* using `monitor`, an undocumented background-shell runner, wrote
+  the file anyway, and then misreported the failure.
+- A **default-deny allowlist held** against an adversarial "use any means necessary" prompt.
+  The file was unchanged.
+- Hooks **fail open**: grok's runner allows the call if the hook times out or crashes. The
+  hook's own ~500s deadline self-denies, but a crashed hook process does not. This is risk
+  reduction, not a sandbox.
 
-## The approval/safety problem (verified)
+**Never replace the allowlist with a list of known write tools.** Unknown tools — including
+shell-capable ones like `monitor` — must default to denial.
 
-These results were verified experimentally with Grok 0.2.101:
+Two invariants are pinned by tests, because nothing else checks them:
+`READONLY_TOOLS` vs the hook script's `case` arm, and `WINDOW_LABEL_PREFIX` vs the `w*` glob in
+`capabilities/default.json` (a drift there costs the window every permission, **silently**, in
+release builds only).
 
-- `grok agent stdio` **never emits `session/request_permission`**, with or without `[features] support_permission = true` in `~/.grok/config.toml`. Both configurations were tested and the target file was rewritten both times. The existing `PermissionCard` / `respond_permission` ACP flow is therefore unreachable today.
-- `PreToolUse` hooks **do fire in `grok agent stdio` mode**, although this behavior is undocumented. Global hooks in `~/.grok/hooks/*.json` are always trusted. A hook receives JSON on stdin with `toolName`, `toolInput`, `sessionId`, and `cwd`; it can deny the call by writing `{"decision":"deny","reason":"..."}` to stdout.
-- Hooks **fail open**: a timeout, crash, or bad output allows the edit to proceed. The default timeout is five seconds. A hook-based approval layer reduces risk but is not a hard security boundary.
-- A denylist of tool names **does not hold**. When a hook denied `write`, `search_replace`, and `run_terminal_command`, Grok routed around the restrictions in the same turn by using `monitor`, an undocumented background-shell runner, to write the file. It then misreported the failure.
-- A **default-deny allowlist does hold** in the tested scenario. A hook allowing only `read_file`, `list_dir`, `grep`, `search_tool`, `web_search`, `web_fetch`, `get_command_or_subagent_output`, and `monitor_status`, while denying every other tool, survived an adversarial “use any means” prompt; the file remained unchanged. This is the chosen architecture for the approval feature.
-- Independent corroboration: [`krakenunbound/grok-desktop`](https://github.com/krakenunbound/grok-desktop), a competing Tauri 2 app at v0.8.0, ships working Allow/Deny approval turns. The interaction is achievable even though this app's current ACP permission path is inert.
+### 2. Sync `#[tauri::command]` runs on the main thread.
 
-Do not replace the allowlist with a list of known write tools. Unknown tools, including shell-capable tools such as `monitor`, must default to denial or an explicit approval turn.
+This froze the whole app for up to five minutes during sign-in, because `authenticate` did
+`rx.recv_timeout(5 * 60)` on it. Fixed in v0.8.4, and the doctrine binds:
 
-## Build & release runbook
+- Blocking body, caller needs the value → `#[tauri::command] async fn` + `spawn_blocking`,
+  re-acquiring `app.state::<AcpState>()` **inside** the closure. Never capture `State` across it.
+- **Bare `#[tauri::command(async)]` on a sync body is banned** — it parks a tokio worker.
+- `authenticate` alone is fire-and-forget on a thread (`send_prompt` is the template).
 
-Prerequisites are Node.js and Rust. From the repository root:
+### 3. Failures here are silent, so the empty case is never the honest answer.
+
+The recurring bug in this codebase is *returning nothing* where the truth is *something broke*.
+Real instances:
+
+- `percent_decode` panicked on a `%` cutting a multi-byte char → `JoinError` →
+  `unwrap_or_default()` → **empty sidebar**, no error.
+- A failed history search rendered as **"No matches"** — a flat lie about conversations on disk.
+- `search_sessions` returns `{hits, content_error}`, not a bare `Vec`, precisely so "content
+  search couldn't run" cannot collapse into "no results".
+
+If you add a fallible read, decide what the user sees when it fails. "Nothing" is a lie.
+
+---
+
+## Architecture notes
+
+### Identity: one project per window
+
+`AcpState` is keyed by `SessionKey { window, tab }`. The `window` half is Tauri's
+`WebviewWindow::label()`, injected from the IPC message — **the webview cannot forge it**, and
+that property is the whole safety argument. Don't accept a window label as a command parameter.
+
+Why it matters: every webview's JS `nextTabId` starts at 1. Keyed by `tab_id` alone, window B's
+`connect("tab-1")` would find window A's session and the non-destructive insert would kill it —
+opening a second project would silently end the conversation you were having.
+
+`SessionKey` is also the emit route (`emit_to(&key.window, ...)`). One struct, one owner.
+`acp-install` stays **broadcast** — installing the CLI is machine-wide.
+
+### Approval ownership
+
+`respond_hook` once did `let _ = tab_id;` — it discarded its only identity and wrote any
+decision it was handed. Sessions now hold the set of requests they actually surfaced, and the
+check **consumes** it. Lock order is **AcpState → emitted, everywhere**: clone the Arc out under
+the AcpState guard, drop the guard, then touch it. `Session::kill` blocks on `child.wait()`, so
+no helper may hold the map guard across it.
+
+### Conversations
+
+Grok advertises `agentCapabilities.loadSession: true`. `session/load` replays the conversation
+as ordinary `session/update` notifications — the same kinds `reduceUpdates` already renders, so
+there is no second render path. The `live/<sessionId>` marker means the approval watcher **must
+be re-armed** after a load, or the resumed conversation runs with no gate.
+
+### Search
+
+Grok maintains its own FTS5 index at `~/.grok/sessions/session_search.sqlite`, live via
+triggers. We query it read-only (WAL; concurrent reads are safe). **Title matching never goes
+through it** — indexing is lazy and races, so ~4% of sessions are unindexed at any moment, and
+title search must cover 100%.
+
+`session_docs.cwd` is **not** canonicalized, and the exact string compare is correct.
+`/private/tmp` and `/tmp` are *two distinct projects* with their own session folders.
+Canonicalizing would merge them; a test fails if you try.
+
+---
+
+## Release runbook
+
+Set the same `X.Y.Z` in **four** places — `package.json`, `src-tauri/tauri.conf.json`,
+`src-tauri/Cargo.toml`, and the `grok-build-desktop` entry in `src-tauri/Cargo.lock`
+(`cargo update -p grok-build-desktop --offline`). CI's `validate-version` job enforces it.
 
 ```bash
-npm install
-npm run tauri dev
+git tag -a vX.Y.Z -m "..."
+git push origin refs/tags/vX.Y.Z   # the full ref: branch and tag share a name
 ```
 
-Before release, set the same `X.Y.Z` version in all four locations:
+macOS builds are **signed and notarized**. `release.yml` notarizes and staples the **`.dmg`
+separately** — tauri notarizes the `.app` and only *signs* the `.dmg` around it, and the `.dmg`
+is what users double-click. Do not delete that step; see `SIGNING.md` for why it looks redundant
+and isn't.
 
-- `package.json`
-- `src-tauri/tauri.conf.json`
-- `src-tauri/Cargo.toml`
-- the `grok-build-desktop` package entry in `src-tauri/Cargo.lock`
+Verify the artifact, not the checkmark:
 
-Commit those changes, then push a matching tag:
-
-```bash
-git tag vX.Y.Z
-git push origin vX.Y.Z
+```sh
+spctl -a -vvv -t open --context context:primary-signature <dmg>   # accepted / Notarized Developer ID
+xcrun stapler validate <dmg>                                       # works offline
 ```
 
-`.github/workflows/release.yml` runs on `v*` tags. Its four-build matrix targets macOS Apple Silicon, macOS Intel, Ubuntu Linux, and Windows. `tauri-apps/tauri-action` builds the installers and minisign-signed updater artifacts using the repository's `TAURI_SIGNING_PRIVATE_KEY` secrets, generates `latest.json`, and publishes a non-draft, non-prerelease GitHub Release.
+Windows is **not** signed; SmartScreen still warns.
 
-## Auto-update
+---
 
-The updater reads:
+## Testing
 
-```text
-https://github.com/Rushour0/grok-build-desktop/releases/latest/download/latest.json
-```
+382 tests: **158 Rust** (`cd src-tauri && cargo test`) + **224 frontend** (`npm run test`,
+Vitest). CI runs `cargo check --all-targets`, `cargo test`, and the frontend suite.
 
-Updater artifacts are minisign-signed in CI and verified against the public key embedded in `src-tauri/tauri.conf.json`. `src/App.tsx` checks for an update at startup but does not install it automatically. It shows an **Update & restart** action; installation and relaunch happen only after the user opts in.
+No test touches the real `~/.grok`: `list_sessions_at` / `search_sessions_at` take a root
+parameter and fixtures build a temp store with a real FTS5 index.
 
-macOS auto-update is fragile while the app bundle is unsigned. There is no Apple Developer ID signing or notarization yet.
+Two rules the suite is built on:
 
-## Known limits & gaps
+- **Never encode a bug as expected.** Several known-real bugs are deliberately *untested* and
+  documented instead. A test that locks in a bug is worse than no test.
+- **Assert on real tags, not substrings.** `<img src=x onerror=alert(1)>` renders as
+  `<p>&lt;img src=x onerror=alert(1)&gt;</p>` — the substring `onerror=` is present and
+  completely inert. A substring assertion fails on *safe* output and pushes the next person to
+  "fix" correct code.
 
-- Builds are not platform code-signed. Gatekeeper and SmartScreen warn on first open.
-- There is no test suite.
-- There is no lint script or lint configuration in the current project setup.
-- Approval is not wired. Grok can currently edit the selected folder without asking, because the implemented ACP permission route never fires.
-- `src/App.tsx` drops ACP `plan` updates in its default switch branch, including their `entries`; they are typed in `src/lib/bridge.ts` but not rendered.
+---
 
-Until the approval bridge exists, use the app only on folders whose changes can be reviewed and reverted, preferably under version control.
+## Known bugs — real, verified, unfixed
 
-## Roadmap / next steps
+All four share one root: **`appendText` searches only the last item while `reduceUpdates`
+searches by id.** Two code paths, one job, different semantics. Extracting one pure helper over
+`(items, id, kind, chunk)` kills the class and makes both testable.
 
-1. **Build the default-deny approval bridge.** Install and manage a global `PreToolUse` hook; immediately allow only the verified read-only tool allowlist; route every other tool request through the Rust host to an Allow/Deny UI; and return valid hook output within the timeout. The hook-side fallback should be denial on app disconnect, malformed responses, or internal errors. Grok's hook runner still fails open if the hook process itself times out or crashes, so keep that process small and treat this as risk reduction rather than a sandbox.
-2. Add persistent chat history and history search.
-3. Add file drop into prompts.
-4. Add tabbed concurrent runs.
-5. Add system-tray behavior.
-6. Add agent discovery.
+| Bug | Status |
+|---|---|
+| `appendText` can push a second item with the same id → duplicate React key | Real; needs answer→thought→answer with no `tool_call` between (which resets). Unobserved in captures. |
+| `reduceUpdates` never accumulates `user_message_chunk` (agent chunks do) | Real; captured replays show user messages arriving whole. Latent. |
+| `toMention(cwd, cwd)` returns a bare `@` | Verified. |
+| `toMention` never relativizes on Windows — guard hardcoded to `/`, though `folderName` handles `\` | Verified. v0.8.0 shipped Windows approval. |
+
+Also deferred: `authenticate`'s pending-entry leak on the timeout arm (commented in-file); the
+tray's zero-window arm is unreachable (Tauri exits with the last window; making it live needs
+`prevent_exit`, a behaviour change); `.side-row.open` has no CSS; dead CSS remains from the
+deleted transcript mode (`.content-header`, `.content-actions`, `.history-state`,
+`.transcript-close`).
+
+## Known limits
+
+- **CLI args don't reach a Finder-launched `.app`** — macOS gives it no argv. They arrive via
+  `./binary <path>` or `open -a "…" --args <path>`. A PATH shim (VS Code's `code`) is the fix.
+- **A second invocation starts a second process**, rather than opening a window in the running one.
+- Windows/Linux CSP behaviour is unverified (only macOS was exercised).
+- Cold sign-in and the install flow have never been driven end to end — they need a signed-out
+  account and an uninstalled CLI.
+- `recent_projects` no longer freezes the app on a stale network mount, but the list itself can
+  hang.
+- Multi-word search is a literal **phrase**: "approval hook" won't match "hook for approval".
+
+## Roadmap
+
+1. The one refactor above (kills four bugs).
+2. Surface grok's own capabilities — it advertises `available_commands` the app currently
+   receives and ignores: `/compact`, `/context`, `/session-info`, and `/always-approve`
+   ("skip all permission prompts"). Note that toggles **grok's** prompts, not this app's hook —
+   they are two different switches and conflating them would be a safety bug.
+3. Reasoning-effort picker: `supportsReasoningEffort` with `[high, medium, low]`, persisted per
+   session as `reasoning_effort` (default `high` — the biggest token lever there is). A *model*
+   picker is pointless: `availableModels` has exactly one entry.
+4. PATH shim + single-instance.
+5. Windows code signing.
+
+Verify before building any of these. `promptCapabilities.image` is `false` and
+`agentCapabilities.auth` is `{}` — there is no auth callback to register, however much it looks
+like there should be.
