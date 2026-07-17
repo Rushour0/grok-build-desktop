@@ -5,7 +5,7 @@ Agent Client Protocol (ACP) over the child's stdio, and forwards the live sessio
 webview. Independent and unofficial: it drives the upstream CLI at runtime and does not
 redistribute it. See `NOTICE`.
 
-Current version: **0.8.8**.
+Current version: **0.9.0**.
 
 ```text
 webview (React)  --invoke-->  Rust host  --stdin-->   grok agent stdio
@@ -191,6 +191,10 @@ deleted transcript mode (`.content-header`, `.content-actions`, `.history-state`
 
 ## Roadmap
 
+0. **Shipped in v0.9.0:** expandable tool cards driven by `x.ai/tool` metadata (source,
+   semantic kind, read-only flag, canonical input, locations) replacing the flat tool pill,
+   plus syntax-highlighted code blocks (highlight.js, class-based, CSP-safe) with a copy
+   button in the transcript's Markdown rendering.
 1. The one refactor above (kills four bugs).
 2. Surface grok's own capabilities — it advertises `available_commands` the app currently
    receives and ignores: `/compact`, `/context`, `/session-info`, and `/always-approve`

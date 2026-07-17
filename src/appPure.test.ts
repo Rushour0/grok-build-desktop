@@ -354,7 +354,15 @@ describe("isFiniteNumber", () => {
 // ---- type guards ----
 
 describe("item type guards", () => {
-  const tool: Item = { id: "t", kind: "tool", title: "Reading", status: "completed" };
+  const tool: Item = {
+    id: "t",
+    kind: "tool",
+    title: "Reading",
+    status: "completed",
+    meta: { source: "unknown" },
+    content: [],
+    locations: [],
+  };
   const ask: Item = {
     id: "p",
     kind: "ask",

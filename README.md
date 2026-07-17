@@ -123,6 +123,8 @@ always `git diff` and undo.
 - [x] Per-turn and cumulative token usage
 - [x] Approval on Windows (experimental, unverified)
 - [x] Code-signed + notarized macOS builds (no Gatekeeper warning) — v0.8.2
+- [x] Expandable tool cards driven by x.ai/tool metadata, plus syntax-highlighted code
+  blocks with copy — v0.9.0
 
 Not yet, on the list:
 
