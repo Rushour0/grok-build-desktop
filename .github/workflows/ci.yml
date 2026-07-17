@@ -67,7 +67,10 @@ jobs:
         with:
           workspaces: ./src-tauri -> target
 
-      - run: cd src-tauri && cargo check
+      # `--all-targets` so the `#[cfg(test)]` module is type-checked too: a plain
+      # `cargo check` skips it entirely, and a test that never compiles is not a gate.
+      - run: cd src-tauri && cargo check --all-targets
+      - run: cd src-tauri && cargo test
 
   version-consistency:
     name: Version consistency

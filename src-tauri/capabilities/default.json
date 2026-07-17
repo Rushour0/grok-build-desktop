@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for every window the app can mint: the `main` window plus each runtime project window. Project windows are labelled `w{N}` by WindowRegistry (src-tauri/src/lib.rs, WINDOW_LABEL_PREFIX = \"w\"), so the `w*` glob below must stay in lockstep with that prefix. A label this list fails to match loses all IPC, and in release builds it fails SILENTLY. Labels are minted only by the registry counter; no user input (never a cwd) is interpolated into one.",
+  "windows": ["main", "w*"],
   "permissions": [
     "core:default",
     "opener:default",
