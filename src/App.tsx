@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "markdown-to-jsx";
+import { SplitDiff } from "./SplitDiff";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -2018,7 +2019,7 @@ function PermissionCard({
       {diffs.map((d, n) => (
         <div className="diff" key={`d${n}`}>
           {d.path && <div className="diff-path">{d.path}</div>}
-          <Diff oldText={d.oldText ?? ""} newText={d.newText ?? ""} />
+          <SplitDiff oldText={d.oldText ?? ""} newText={d.newText ?? ""} />
         </div>
       ))}
       {commands.map((c, n) => (
@@ -2061,28 +2062,6 @@ function PlanCard({ entries }: { entries: PlanItem["entries"] }) {
   );
 }
 
-/// Deliberately dumb line diff — enough to answer "what is about to change?".
-function Diff({ oldText, newText }: { oldText: string; newText: string }) {
-  const before = oldText ? oldText.split("\n") : [];
-  const after = newText ? newText.split("\n") : [];
-  const removed = before.filter((l) => !after.includes(l));
-  const added = after.filter((l) => !before.includes(l));
-  return (
-    <pre className="diff-body">
-      {removed.map((l, i) => (
-        <div key={`r${i}`} className="del">
-          - {l}
-        </div>
-      ))}
-      {added.map((l, i) => (
-        <div key={`a${i}`} className="add">
-          + {l}
-        </div>
-      ))}
-      {!removed.length && !added.length && <div className="nil">(no textual change)</div>}
-    </pre>
-  );
-}
 
 function Splash({
   title,

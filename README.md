@@ -46,6 +46,10 @@ latest instead.)
 - **Shows the work.** Streamed answers, live tool cards as the agent reads and edits files,
   a running plan, and per-turn token usage — all in a monochrome UI with subtle depth and
   motion that stays out of the way.
+- **Reviews every edit before it lands.** Each change grok proposes opens as a side-by-side
+  **split-view diff** — matching lines aligned across from each other, changed words
+  highlighted, long unchanged stretches collapsed — behind an Allow/Deny gate. No approving
+  edits blind from a terminal scrollback.
 
 <p align="center">
   <img src="docs/screenshots/launcher-dark.png" alt="The launcher — open a project folder, or reopen a recent one, with search across every past conversation" width="860">

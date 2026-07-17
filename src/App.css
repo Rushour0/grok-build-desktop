@@ -1004,7 +1004,9 @@ button.tab-close:hover {
   border: 1px solid var(--line);
   border-radius: 10px;
   overflow: hidden;
-  max-width: 72ch;
+  /* Wider than the 72ch prose measure: a side-by-side diff needs room for two columns, and
+     the approval card is the one place that earns it. */
+  max-width: min(100%, 60rem);
   width: 100%;
   box-shadow: var(--shadow-2);
 }
@@ -1082,6 +1084,113 @@ button.tab-close:hover {
   color: var(--ink);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ---- split-view diff: old on the left, new on the right, changed words marked ----
+   This is the review the terminal can't give you. The semantic --ok/--danger are the only
+   colour here, tinted low for the line and stronger for the exact words that moved. */
+.split-diff-wrap {
+  border-top: 1px solid var(--line);
+}
+.split-diff-tools {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.3rem 0.5rem 0.2rem;
+}
+.diff-tool {
+  padding: 0.12rem 0.5rem;
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+  border-radius: 6px;
+}
+.diff-tool:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--panel);
+}
+.split-diff {
+  overflow: auto;
+  max-height: 360px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+.split-diff-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  min-width: 100%;
+}
+.d-num {
+  padding: 0 0.5rem;
+  text-align: right;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  user-select: none;
+  background: var(--panel);
+}
+/* The seam between the two files sits on the new-file gutter, so it holds regardless of the
+   gap rows that break the cell rhythm. */
+.d-num-new {
+  border-left: 1px solid var(--line);
+}
+.d-num.empty {
+  background: color-mix(in srgb, var(--ink-soft) 7%, transparent);
+}
+.d-code {
+  padding: 0 0.6rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+/* Nowrap turns the whole diff into one horizontally-scrolling surface — sometimes you want to
+   see a long line whole rather than folded. */
+.split-diff.nowrap .d-code {
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+.d-code.del {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.d-code.add {
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+.d-code.empty {
+  background: color-mix(in srgb, var(--ink-soft) 7%, transparent);
+}
+/* Word-level, stronger than the line tint: the exact edit, not just the changed line. */
+.seg-del {
+  background: color-mix(in srgb, var(--danger) 32%, transparent);
+  border-radius: 2px;
+}
+.seg-add {
+  background: color-mix(in srgb, var(--ok) 32%, transparent);
+  border-radius: 2px;
+}
+/* The collapsed-context bar, spanning both files; click to reveal the hidden lines. */
+.diff-gap {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding: 0.28rem 0.75rem;
+  text-align: left;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+  background: var(--panel);
+  border: 0;
+  border-block: 1px solid var(--line);
+  border-radius: 0;
+  transition: background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+.diff-gap:hover {
+  background: var(--bg);
+  color: var(--ink);
+}
+.split-diff-empty {
+  padding: 0.5rem 0.75rem;
+  color: var(--ink-soft);
+  font-style: italic;
+  font-size: 0.75rem;
 }
 
 /* ---- plan timeline ---- */
