@@ -2916,3 +2916,197 @@ textarea:focus-visible {
     transition: none;
   }
 }
+
+/* ---- tasks overlay (background/subagent dashboard) ----
+   Same floating-layer family as .prefs/.rewind — .tasks-backdrop/.tasks mirror
+   .prefs-backdrop/.prefs exactly (scrim tuning, panel sizing, animation) so this reads as
+   one modal system, not a fourth bespoke one. Monochrome: status/kind badges are text +
+   border only, never a new hue — state is legible from the word, not a color code. */
+
+.tasks-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+  background: rgba(0, 0, 0, 0.28);
+  animation: fade-up var(--dur-fast) var(--ease-standard) both;
+}
+@media (prefers-color-scheme: dark) {
+  .tasks-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+:root[data-theme="dark"] .tasks-backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="light"] .tasks-backdrop {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.tasks {
+  width: min(560px, calc(100vw - 2.5rem));
+  max-height: min(78vh, 640px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow-3);
+  animation: scale-in var(--dur) var(--ease-out) both;
+}
+
+.tasks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: none;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.tasks-body {
+  overflow-y: auto;
+  padding: 0.6rem 1.1rem 1.1rem;
+}
+
+.tasks-hint {
+  margin: 0.3rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+}
+
+/* Task list: one row per subagent/background task, same list-row idiom as .rewind-point
+   but static (no selection) since these rows are read-only status, not a pickable target. */
+.tasks-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.5rem 0 0;
+}
+
+.tasks-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.tasks-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.tasks-row-title {
+  color: var(--ink);
+  font-size: 0.84rem;
+  line-height: 1.35;
+  /* Long titles clip to one line so the list stays scannable. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+}
+
+.tasks-row-detail {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Kind badge: same static-pill idiom as .prefs-tool-chip — a fixed, non-interactive label. */
+.tasks-kind {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+/* Status badge: same static-pill idiom, but weight (not hue) carries the "active" states —
+   running/monitoring lean on --ink for emphasis, everything else stays muted. */
+.tasks-status {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.tasks-status.running,
+.tasks-status.monitoring {
+  border-color: color-mix(in srgb, var(--ink) 25%, var(--line));
+  color: var(--ink);
+}
+.tasks-status.failed {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
+}
+
+/* Elapsed time: muted, monospace so durations don't jitter the row width as digits change. */
+.tasks-elapsed {
+  flex: none;
+  color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.tasks-empty {
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tasks-backdrop,
+  .tasks {
+    animation: none;
+    transition: none;
+  }
+}

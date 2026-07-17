@@ -5,7 +5,7 @@ Agent Client Protocol (ACP) over the child's stdio, and forwards the live sessio
 webview. Independent and unofficial: it drives the upstream CLI at runtime and does not
 redistribute it. See `NOTICE`.
 
-Current version: **0.9.5**.
+Current version: **0.9.6**.
 
 ```text
 webview (React)  --invoke-->  Rust host  --stdin-->   grok agent stdio
@@ -235,6 +235,17 @@ deleted transcript mode (`.content-header`, `.content-actions`, `.history-state`
    in-app React UI only, following the same pattern as the `UpdateBanner` two-step update gate.
    After a successful execute, the transcript is rebuilt via the existing reload/replay flow
    (re-arm `sessionReplays`, `loadSession`, `reduceUpdates`) rather than hand-patched in place.
+0f. **Shipped in v0.9.6 ("subagent/task dashboard"):** a Tasks panel showing the agent's
+   spawned subagents and background/scheduled tasks live, sourced from `x.ai/session_notification`
+   ACP notifications — previously silently dropped by `spawn_reader`'s wildcard match arm, now
+   forwarded as an additive `acp-notify` emit mirroring the existing `acp-update` emit. The
+   notification's tagged variant is unverified headlessly, so parsing (`src/lib/notify.ts`) is
+   defensive: it reads a tag from `sessionUpdate`/`type`/`kind`, tolerates unknown/irrelevant
+   variants without throwing, and only turns subagent/task-ish variants into dashboard rows.
+   Display-only, read-only — no actions that mutate anything. **Full MCP server management
+   (viewing/adding/removing MCP servers from the app) is intentionally deferred**, not shipped
+   here: it would mean the app writes to Grok's own config file and handles secrets, which is a
+   materially different trust boundary than the read-only surfaces shipped so far.
 1. The one refactor above (kills four bugs).
 2. ~~Surface grok's own capabilities — it advertises `available_commands`~~ — the slash-command
    piece is done (see 0a). Remaining: exposing `/compact`, `/context`, `/session-info`, and

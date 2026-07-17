@@ -52,6 +52,8 @@ import { Preferences } from "./Preferences";
 import { MessageActions } from "./MessageActions";
 import { RewindPanel } from "./RewindPanel";
 import { normalizeRewindPoints, type RewindMode } from "./lib/rewind";
+import { TasksPanel } from "./TasksPanel";
+import { parseNotify, mergeTask, type TaskItem } from "./lib/notify";
 import { filterSlash, filterFiles, detectTrigger, applyPick } from "./lib/commands";
 import { isThemePref, applyTheme, type ThemePref } from "./lib/theme";
 import "./App.css";
@@ -163,6 +165,12 @@ export interface Tab {
   /// has actually told us — the Preferences "Model" section falls back to
   /// "Unknown" rather than assuming a model that was never confirmed.
   sessionInfo?: SessionModelInfo;
+  /// Grok's background work for this tab — spawned subagents, backgrounded/
+  /// scheduled tasks — accumulated from `x.ai/session_notification` events via
+  /// `parseNotify`/`mergeTask`. `undefined` until the first relevant notification
+  /// arrives; never touched by `reduceUpdates`/replay (notify isn't an
+  /// `acp-update`, it's a separate, non-standard side channel).
+  tasks?: TaskItem[];
 }
 
 let nextTabId = 1;
@@ -470,6 +478,10 @@ export default function App() {
   // The Preferences overlay (gear button / ⌘, / palette action). Not a Stage —
   // it floats over whatever screen is already showing, like the command palette.
   const [prefsOpen, setPrefsOpen] = useState(false);
+  // The Tasks overlay (titlebar button / palette action) — a read-only view of
+  // the active tab's `tasks`, floating over whatever screen is showing, same
+  // idiom as `prefsOpen` above.
+  const [tasksOpen, setTasksOpen] = useState(false);
   // The CLI's `--version` output, fetched lazily the first time Preferences'
   // About section is opened and cached here so re-opening it doesn't re-spawn
   // the subprocess every time.
@@ -1090,6 +1102,15 @@ export default function App() {
       onUpdate,
       onSessionInfo: (tabId, info) => {
         updateTab(tabId, (tab) => ({ ...tab, sessionInfo: info }));
+      },
+      // `x.ai/session_notification` — grok's non-standard side channel for
+      // spawned subagents and backgrounded/scheduled tasks. `parseNotify`
+      // returns null for anything not task/subagent-shaped (defensive parse,
+      // never throws), so most notifications are silently ignored here.
+      onNotify: (tabId, payload) => {
+        const rec = parseNotify(payload);
+        if (!rec) return;
+        updateTab(tabId, (tab) => ({ ...tab, tasks: mergeTask(tab.tasks ?? [], rec, Date.now()) }));
       },
       onAuth: (tabId, auth) => {
         if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
@@ -1757,6 +1778,12 @@ export default function App() {
         keywords: "preferences settings theme appearance model effort about updates keyboard",
         run: () => setPrefsOpen(true),
       },
+      {
+        id: "tasks",
+        title: "Tasks",
+        keywords: "tasks subagents background scheduled jobs dashboard",
+        run: () => setTasksOpen(true),
+      },
     ];
     if (activeTabId) {
       actions.push({
@@ -1894,6 +1921,27 @@ export default function App() {
           >
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+        <button
+          className="tasks-toggle"
+          onClick={() => setTasksOpen(true)}
+          title="Tasks"
+          aria-label="Open tasks"
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M9 11l3 3L22 4" />
+            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
           </svg>
         </button>
       </div>
@@ -2295,6 +2343,7 @@ export default function App() {
         focusPointId={rewindFocusId}
         onConfirm={(pointId, mode) => void confirmRewind(pointId, mode)}
       />
+      <TasksPanel open={tasksOpen} onClose={() => setTasksOpen(false)} tasks={activeTab?.tasks ?? []} />
     </div>
   );
 }

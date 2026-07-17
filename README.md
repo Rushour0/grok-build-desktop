@@ -155,12 +155,16 @@ Grok, or its own metadata, any new trust.
 - [x] Checkpoint/rewind — restore an earlier point in a conversation (conversation, files, or
   both), from a "Rewind to here" action on your own messages, with a two-step confirmation
   before any file restore — v0.9.5
+- [x] Tasks panel — a live dashboard of the agent's spawned subagents and background/scheduled
+  tasks, read from x.ai/session_notification events — v0.9.6
 
 Not yet, on the list:
 
 - [ ] Cost display — token counts are shown, but not converted to currency
 - [ ] Code-signed Windows builds (no SmartScreen warning)
 - [ ] Optional `XAI_API_KEY` sign-in for people using API credits
+- [ ] Full MCP server management (view/add/remove MCP servers from the app) — deferred
+  intentionally, since it would mean the app writes to Grok's own config and handles secrets
 
 ## Credits
 

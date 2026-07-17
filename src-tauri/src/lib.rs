@@ -1019,6 +1019,11 @@ fn spawn_reader(
                     }
                     key.emit(&app, "acp-permission", payload);
                 }
+                // x.ai's subagent/background-task notifications (Tasks dashboard, v0.9.6).
+                // Forwarded verbatim to the webview; parsing is done there defensively.
+                "x.ai/session_notification" | "_x.ai/session_notification" => {
+                    key.emit(&app, "acp-notify", params);
+                }
                 // Notifications we don't model yet carry no id and need no reply.
                 _ => {
                     if let Some(id) = msg.get("id") {

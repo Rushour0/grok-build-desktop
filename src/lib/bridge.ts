@@ -308,6 +308,17 @@ export interface SessionModelInfo {
   };
 }
 
+/// A raw `x.ai/session_notification` payload — subagent/task chatter that Rust
+/// forwards verbatim on `acp-notify`. This is x.ai-only and non-standard, so the
+/// shape is deliberately loose: `sessionUpdate` is the (unverified) tag field,
+/// everything else is whatever that notification variant happened to carry.
+/// Parse defensively (see `lib/notify.ts`), never assume a field is present.
+export interface AcpNotify {
+  tabId: string;
+  sessionUpdate?: string;
+  [k: string]: unknown;
+}
+
 // ---- events (Rust -> webview) ----
 
 type Handlers = {
@@ -320,6 +331,7 @@ type Handlers = {
   onConnect?: (tabId: string, c: AcpConnect) => void;
   onInstall?: (e: InstallEvent) => void;
   onSessionInfo?: (tabId: string, info: SessionModelInfo) => void;
+  onNotify?: (tabId: string, payload: AcpNotify) => void;
 };
 
 /// Subscribe to the agent stream. Returns a disposer that detaches every listener.
@@ -349,6 +361,9 @@ export async function subscribe(h: Handlers): Promise<UnlistenFn> {
     win.listen<InstallEvent>("acp-install", (e) => e.payload && h.onInstall?.(e.payload)),
     win.listen<{ tabId: string; model?: SessionModelInfo }>("acp-session-info", (e) =>
       e.payload?.model && h.onSessionInfo?.(e.payload.tabId, e.payload.model),
+    ),
+    win.listen<AcpNotify>("acp-notify", (e) =>
+      e.payload?.tabId && h.onNotify?.(e.payload.tabId, e.payload),
     ),
   ]);
   return () => offs.forEach((off) => off());

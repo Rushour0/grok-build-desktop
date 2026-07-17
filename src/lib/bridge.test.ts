@@ -18,6 +18,7 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
 }));
 
 import {
+  type AcpNotify,
   type AvailableCommand,
   authStatus,
   authenticate,
@@ -358,6 +359,7 @@ function spyHandlers() {
     onConnect: vi.fn(),
     onInstall: vi.fn(),
     onSessionInfo: vi.fn(),
+    onNotify: vi.fn(),
   };
 }
 
@@ -369,11 +371,11 @@ describe("subscribe: wiring", () => {
     // that module is mocked to nothing here, so a global call would throw.
     const capture = captureListeners();
     await subscribe(spyHandlers());
-    expect(listen).toHaveBeenCalledTimes(9);
-    expect(capture.names()).toHaveLength(9);
+    expect(listen).toHaveBeenCalledTimes(10);
+    expect(capture.names()).toHaveLength(10);
   });
 
-  it("registers exactly the nine known event names", async () => {
+  it("registers exactly the ten known event names", async () => {
     const capture = captureListeners();
     await subscribe(spyHandlers());
     expect(capture.names().sort()).toEqual(
@@ -383,6 +385,7 @@ describe("subscribe: wiring", () => {
         "acp-connect",
         "acp-error",
         "acp-install",
+        "acp-notify",
         "acp-permission",
         "acp-session-info",
         "acp-turn-end",
@@ -395,7 +398,7 @@ describe("subscribe: wiring", () => {
     const capture = captureListeners();
     const off = await subscribe(spyHandlers());
     off();
-    expect(capture.unlisteners).toHaveLength(9);
+    expect(capture.unlisteners).toHaveLength(10);
     for (const unlisten of capture.unlisteners) expect(unlisten).toHaveBeenCalledTimes(1);
   });
 });
@@ -546,6 +549,30 @@ describe("subscribe: event routing", () => {
     capture.emit("acp-session-info", { tabId: "tab-1" });
     expect(h.onSessionInfo).not.toHaveBeenCalled();
   });
+
+  it("routes acp-notify with its tabId and the whole payload", async () => {
+    // AcpNotify is a loose, x.ai-only shape (see bridge.ts) — subscribe must not
+    // pick fields out of it, just forward the raw payload alongside the tabId.
+    const notify: AcpNotify = {
+      tabId: "tab-1",
+      sessionUpdate: "subagent_spawned",
+      subagentId: "sub-1",
+      name: "researcher",
+    };
+    const capture = captureListeners();
+    const h = spyHandlers();
+    await subscribe(h);
+    capture.emit("acp-notify", notify);
+    expect(h.onNotify).toHaveBeenCalledWith("tab-1", notify);
+  });
+
+  it("drops an acp-notify carrying no tabId", async () => {
+    const capture = captureListeners();
+    const h = spyHandlers();
+    await subscribe(h);
+    capture.emit("acp-notify", { sessionUpdate: "monitor_event" });
+    expect(h.onNotify).not.toHaveBeenCalled();
+  });
 });
 
 describe("subscribe: absent payloads and optional handlers", () => {
@@ -559,6 +586,7 @@ describe("subscribe: absent payloads and optional handlers", () => {
     "acp-connect",
     "acp-install",
     "acp-session-info",
+    "acp-notify",
   ])("survives a null payload on %s", async (event) => {
     const capture = captureListeners();
     const h = spyHandlers();
@@ -572,12 +600,20 @@ describe("subscribe: absent payloads and optional handlers", () => {
     ["acp-connect", { tabId: "tab-1", stage: "ready" }],
     ["acp-install", { status: "done" }],
     ["acp-session-info", { tabId: "tab-1", model: { currentModelId: "grok-4" } }],
+    ["acp-notify", { tabId: "tab-1", sessionUpdate: "monitor_event" }],
   ])("survives %s when the optional handler is omitted", async (event, payload) => {
-    // onAuth/onConnect/onInstall/onSessionInfo are optional in `Handlers`. A
-    // caller that wants only the core five must not crash on an event it
-    // never asked about.
+    // onAuth/onConnect/onInstall/onSessionInfo/onNotify are optional in
+    // `Handlers`. A caller that wants only the core five must not crash on an
+    // event it never asked about.
     const capture = captureListeners();
-    const { onAuth: _a, onConnect: _c, onInstall: _i, onSessionInfo: _s, ...core } = spyHandlers();
+    const {
+      onAuth: _a,
+      onConnect: _c,
+      onInstall: _i,
+      onSessionInfo: _s,
+      onNotify: _n,
+      ...core
+    } = spyHandlers();
     await subscribe(core);
     expect(() => capture.emit(event, payload)).not.toThrow();
   });
