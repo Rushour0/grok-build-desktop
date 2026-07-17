@@ -1782,6 +1782,98 @@ fn list_sessions_at(root: &Path, cwd: Option<String>) -> Vec<SessionMeta> {
     sessions
 }
 
+/// Directory names the @-mention walk never descends into.
+///
+/// `.git`/`node_modules`/`target`/`dist`/`.next`/`build`/`.venv`/`__pycache__` by name
+/// (they're huge, generated, or both, in any project); every OTHER dotdir is skipped by
+/// the leading-`.` check below rather than listed here one at a time — an allowlist of
+/// dotdirs to skip would silently miss whichever tool's cache dir hasn't been added yet.
+const SKIP_DIRS: [&str; 8] = [
+    ".git",
+    "node_modules",
+    "target",
+    "dist",
+    ".next",
+    "build",
+    ".venv",
+    "__pycache__",
+];
+
+/// How deep the @-mention walk descends, and how many files it will collect.
+///
+/// Both exist for the same reason: this walks a directory the USER chose, not one this
+/// app controls the shape of, and a project with a deeply nested tree or hundreds of
+/// thousands of files must not hang the picker or the app. Hitting either cap stops the
+/// walk cleanly (no error, no partial-looking failure) rather than exhausting memory or
+/// time trying to enumerate everything.
+const MAX_WALK_DEPTH: usize = 8;
+const MAX_WALK_FILES: usize = 5000;
+
+#[tauri::command]
+async fn list_project_files(cwd: String) -> Result<Vec<String>, String> {
+    // The walk touches disk and can be arbitrarily large (see `MAX_WALK_FILES`), so it
+    // never runs on the tokio worker (HANDOFF.md #2) — `spawn_blocking`, and the `PathBuf`
+    // is built and consumed entirely inside the closure.
+    tauri::async_runtime::spawn_blocking(move || list_project_files_inner(Path::new(&cwd)))
+        .await
+        .map_err(|e| format!("The file list didn't finish: {e}"))
+}
+
+/// The walk itself, pointed at an explicit root.
+///
+/// Split from the command for the same reason as `list_sessions_at`: a pure `&Path ->
+/// Vec<String>` fn is testable against a temp fixture without touching a real project.
+/// Returns paths relative to `root`, forward-slash-joined regardless of host OS, sorted,
+/// so the frontend's `filterFiles` gets a stable, comparable list to fuzzy-match against.
+fn list_project_files_inner(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    walk_project_files(root, root, 0, &mut out);
+    out.sort();
+    out
+}
+
+fn walk_project_files(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
+    if depth > MAX_WALK_DEPTH || out.len() >= MAX_WALK_FILES {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if out.len() >= MAX_WALK_FILES {
+            return;
+        }
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+
+        if file_type.is_dir() {
+            // Every dotdir is skipped, not just the named ones above (`SKIP_DIRS`) — see
+            // its doc comment for why an allowlist alone isn't enough.
+            if name.starts_with('.') || SKIP_DIRS.contains(&name.as_ref()) {
+                continue;
+            }
+            walk_project_files(root, &path, depth + 1, out);
+        } else if file_type.is_file() {
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
+            // Forward-slash unconditionally: this feeds `@mention` tokens the user types
+            // and the frontend compares, so a Windows `\` would silently never match.
+            let relative = relative
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            out.push(relative);
+        }
+    }
+}
+
 /// One conversation that matched, and WHY it matched.
 ///
 /// The "why" is half the feature, not decoration. The old search returned bare ids: with
@@ -2821,6 +2913,7 @@ pub fn run() {
             install_grok,
             recent_projects,
             list_sessions,
+            list_project_files,
             search_sessions,
             open_project,
             window_project,
@@ -5471,6 +5564,88 @@ mod tests {
                 ],
                 "content_error": "boom"
             })
+        );
+    }
+
+    // ---- list_project_files_inner ------------------------------------------------------
+
+    /// A temp dir this test owns end to end, deleted on drop. Hand-rolled like
+    /// `TempStore` above and for the same reason: no extra dependency for one throwaway
+    /// fixture, and pid + a counter keeps it unique across concurrent test threads.
+    struct TempProject(PathBuf);
+
+    impl TempProject {
+        fn new() -> TempProject {
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "gbd-project-files-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("temp project dir");
+            TempProject(path)
+        }
+
+        fn root(&self) -> &Path {
+            &self.0
+        }
+
+        fn file(&self, relative: &str) -> &TempProject {
+            let path = self.0.join(relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("fixture parent dir");
+            }
+            std::fs::write(path, "fixture").expect("fixture file");
+            self
+        }
+    }
+
+    impl Drop for TempProject {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn list_project_files_inner_skips_generated_dirs_and_sorts_the_rest() {
+        let project = TempProject::new();
+        project
+            .file("src/main.rs")
+            .file("README.md")
+            .file("src/lib/mod.rs")
+            // Must be skipped: named generated dirs.
+            .file("node_modules/left-pad/index.js")
+            .file(".git/HEAD")
+            // Must be skipped: any dotdir, not just the named ones.
+            .file(".vscode/settings.json");
+
+        let files = list_project_files_inner(project.root());
+
+        assert_eq!(
+            files,
+            vec![
+                "README.md".to_string(),
+                "src/lib/mod.rs".to_string(),
+                "src/main.rs".to_string(),
+            ],
+            "node_modules, .git and every other dotdir are skipped; the rest are sorted"
+        );
+    }
+
+    #[test]
+    fn list_project_files_inner_caps_rather_than_hangs_on_a_huge_tree() {
+        let project = TempProject::new();
+        for i in 0..(MAX_WALK_FILES + 50) {
+            project.file(&format!("f{i}.txt"));
+        }
+
+        let files = list_project_files_inner(project.root());
+
+        assert_eq!(
+            files.len(),
+            MAX_WALK_FILES,
+            "the walk stops cleanly at the cap instead of erroring or running unbounded"
         );
     }
 }

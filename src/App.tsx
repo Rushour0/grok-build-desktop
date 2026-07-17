@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Markdown from "markdown-to-jsx";
 import { SplitDiff } from "./SplitDiff";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -27,7 +27,9 @@ import {
   busySessions,
   shutdownAll,
   subscribe,
+  listProjectFiles,
   type AuthMethod,
+  type AvailableCommand,
   type PermissionRequest,
   type Project,
   type SearchHit,
@@ -37,6 +39,9 @@ import {
 import { toolFieldsFromCall, mergeToolUpdate, type ToolFields } from "./lib/toolMeta";
 import { ToolCard } from "./ToolCard";
 import { CodeBlock } from "./CodeBlock";
+import { CommandPalette, type PaletteAction } from "./CommandPalette";
+import { Autocomplete, type AcItem } from "./Autocomplete";
+import { filterSlash, filterFiles, detectTrigger, applyPick } from "./lib/commands";
 import "./App.css";
 
 // Installation is global. A *window* owns one project folder (Rust decides which,
@@ -132,6 +137,15 @@ export interface Tab {
   /// This tab's own failure — folder open, connect, or sign-in. Kept per-tab so a
   /// folder error can never surface on another tab's screen.
   error: string | null;
+  /// Grok's advertised slash commands for this session, from the most recent
+  /// `available_commands_update`. `undefined` until the first one arrives —
+  /// the "/" autocomplete just shows nothing until then, never a stale list
+  /// from a different session.
+  availableCommands?: AvailableCommand[];
+  /// Cached `listProjectFiles(cwd)` result for the "@" mention autocomplete.
+  /// Fetched lazily on the first "@" trigger and cached here so retyping "@"
+  /// doesn't re-walk the project tree on every keystroke.
+  projectFiles?: string[];
 }
 
 let nextTabId = 1;
@@ -448,8 +462,22 @@ export default function App() {
   const [updateGate, setUpdateGate] = useState<{ busy: number | null } | null>(null);
   const [installLine, setInstallLine] = useState<string | null>(null);
   const [installDetail, setInstallDetail] = useState<string | null>(null);
+  // Cmd/Ctrl+K command palette (app actions, not grok's slash commands).
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // The composer textarea's caret offset, kept in state because detectTrigger
+  // needs it on every render, not just on change — a plain click or arrow-key
+  // move can open or close a trigger without the draft text itself changing.
+  const [composerCaret, setComposerCaret] = useState(0);
+  // Which row of the slash/@ dropdown is highlighted.
+  const [acIndex, setAcIndex] = useState(0);
+  // Esc hides the dropdown without touching the draft; it re-arms the next
+  // time the trigger itself changes (new "/" or "@", or the query changes),
+  // so dismissing "/f" doesn't also suppress "/fo" a keystroke later.
+  const [acDismissed, setAcDismissed] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   // `session/load` replays before its response. Keep those normal ACP updates
   // together, then render the whole replay through the history reducer.
   const sessionReplays = useRef<Map<string, SessionUpdate[]>>(new Map());
@@ -758,6 +786,12 @@ export default function App() {
         setSidebarOpen((open) => !open);
         return;
       }
+      // Cmd/Ctrl+K opens the app-action command palette.
+      if (event.key === "k" || event.key === "K") {
+        event.preventDefault();
+        setPaletteOpen(true);
+        return;
+      }
       if (event.key !== "w" && event.key !== "W") return;
       event.preventDefault();
       const openTab = activeTabId;
@@ -892,6 +926,12 @@ export default function App() {
               : [...tab.items, { id, kind: "plan", entries }],
           }));
           openBubbles.current.set(tabId, {});
+          break;
+        }
+        case "available_commands_update": {
+          // Session metadata, not a renderable Item — live-only, deliberately
+          // absent from reduceUpdates/replay (see lib/bridge.ts).
+          updateTab(tabId, (tab) => ({ ...tab, availableCommands: u.availableCommands ?? [] }));
           break;
         }
         default:
@@ -1418,6 +1458,137 @@ export default function App() {
     }
   }
 
+  // ---- Cmd/Ctrl+K palette + "/" and "@" composer autocomplete ----
+  //
+  // Caret math and ranking are all in lib/commands.ts (pure, unit-tested); this
+  // block is only wiring: read the caret, ask detectTrigger what's active, turn
+  // that into AcItem[], and reset the ephemeral bits (highlighted row, Esc
+  // dismissal) whenever the trigger identity itself changes.
+  const composerText = activeTab?.draft ?? "";
+  const trigger = detectTrigger(composerText, Math.min(composerCaret, composerText.length));
+  const acItems: AcItem[] = trigger.kind === null || !activeTab
+    ? []
+    : trigger.kind === "slash"
+      ? filterSlash(activeTab.availableCommands ?? [], trigger.query).map((c) => ({
+          id: c.name,
+          label: `/${c.name}`,
+          sub: c.description ?? c.hint,
+        }))
+      : filterFiles(activeTab.projectFiles ?? [], trigger.query).map((f) => ({ id: f, label: f }));
+  const visibleAcItems = acDismissed ? [] : acItems;
+
+  // A new/changed trigger re-arms the dropdown (undoes a previous Esc) and
+  // snaps the highlight back to the top match.
+  useEffect(() => {
+    setAcDismissed(false);
+    setAcIndex(0);
+  }, [trigger.kind, trigger.start, trigger.query]);
+
+  // Switching tabs must not carry over the previous tab's caret position —
+  // caret 0 on the new tab's own draft never triggers detectTrigger, so this
+  // is the same as "no trigger" until the user actually clicks/types there.
+  useEffect(() => {
+    setComposerCaret(0);
+  }, [activeTabId]);
+
+  // Lazily fetch the project's file list on the first "@" trigger, once per
+  // tab, and cache it on the tab so retyping "@" doesn't re-walk the tree.
+  useEffect(() => {
+    if (!activeTab || trigger.kind !== "mention" || activeTab.projectFiles) return;
+    const tabId = activeTab.id;
+    const cwd = activeTab.cwd;
+    let cancelled = false;
+    listProjectFiles(cwd)
+      .then((files) => {
+        if (!cancelled) updateTab(tabId, (tab) => (tab.projectFiles ? tab : { ...tab, projectFiles: files }));
+      })
+      .catch(() => {
+        // A failed listing degrades to "no matches", not a crash — the mention
+        // trigger just won't offer anything until it's tried again.
+        if (!cancelled) updateTab(tabId, (tab) => (tab.projectFiles ? tab : { ...tab, projectFiles: [] }));
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Primitive deps only: `activeTab` itself is a fresh object on every tabs
+    // update (streaming chunks, etc.), which would otherwise re-fire this on
+    // every keystroke of an unrelated turn. The `!activeTab.projectFiles`
+    // guard above is what actually decides whether to fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab?.id, activeTab?.cwd, activeTab?.projectFiles, trigger.kind, updateTab]);
+
+  /// Replace the live trigger token with the picked slash command or file
+  /// mention, move the caret past it, and put focus back in the textarea so
+  /// picking with the mouse doesn't strand the cursor.
+  function applyAcPick(item: AcItem) {
+    if (!activeTab) return;
+    const replacement =
+      trigger.kind === "slash"
+        ? `/${item.id} `
+        : item.id.includes(" ")
+          ? `@"${item.id}" `
+          : `@${item.id} `;
+    const applied = applyPick(composerText, trigger, replacement);
+    updateActiveTab((tab) => ({ ...tab, draft: applied.text }));
+    setComposerCaret(applied.caret);
+    setAcDismissed(true);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(applied.caret, applied.caret);
+      }
+    });
+  }
+
+  // App-action palette: real handlers, not placeholders. "New chat" and "New
+  // tab" are the same action (addRun), per the wiring spec.
+  const paletteActions: PaletteAction[] = useMemo(() => {
+    const actions: PaletteAction[] = [
+      {
+        id: "new-chat",
+        title: "New chat",
+        keywords: "new tab conversation",
+        run: () => {
+          void addRun();
+        },
+      },
+      {
+        id: "open-folder",
+        title: "Open folder…",
+        keywords: "project folder open",
+        run: () => {
+          void pickProject();
+        },
+      },
+      {
+        id: "toggle-sidebar",
+        title: sidebarOpen ? "Hide sidebar" : "Show sidebar",
+        hint: "⌘B",
+        keywords: "sidebar panel toggle show hide",
+        run: () => setSidebarOpen((open) => !open),
+      },
+      {
+        id: "focus-search",
+        title: "Focus search",
+        keywords: "search conversations find history",
+        run: () => {
+          searchInputRef.current?.focus();
+        },
+      },
+    ];
+    if (activeTabId) {
+      actions.push({
+        id: "close-tab",
+        title: "Close tab",
+        hint: "⌘W",
+        keywords: "close tab conversation",
+        run: () => closeTab(activeTabId),
+      });
+    }
+    return actions;
+  }, [sidebarOpen, activeTabId]);
+
   const banner = update ? (
     <UpdateBanner
       update={update}
@@ -1527,6 +1698,7 @@ export default function App() {
             </button>
           </div>
           <input
+            ref={searchInputRef}
             className="side-search"
             type="search"
             value={historyQuery}
@@ -1794,13 +1966,44 @@ export default function App() {
                         ))}
                       </div>
                     )}
+                    <Autocomplete items={visibleAcItems} activeIndex={acIndex} onPick={applyAcPick} />
                     <textarea
+                      ref={textareaRef}
                       value={activeTab.draft}
                       onChange={(e) => {
                         const draft = e.currentTarget.value;
                         updateActiveTab((tab) => ({ ...tab, draft }));
+                        setComposerCaret(e.currentTarget.selectionStart ?? draft.length);
                       }}
+                      onSelect={(e) => setComposerCaret(e.currentTarget.selectionStart ?? 0)}
+                      onClick={(e) => setComposerCaret(e.currentTarget.selectionStart ?? 0)}
+                      onKeyUp={(e) => setComposerCaret(e.currentTarget.selectionStart ?? 0)}
                       onKeyDown={(e) => {
+                        // The "/" and "@" dropdown gets first refusal on these keys —
+                        // ONLY while it actually has items showing — before falling
+                        // through to the ordinary Enter-submits behavior below.
+                        if (visibleAcItems.length > 0) {
+                          if (e.key === "ArrowDown") {
+                            e.preventDefault();
+                            setAcIndex((i) => (i + 1) % visibleAcItems.length);
+                            return;
+                          }
+                          if (e.key === "ArrowUp") {
+                            e.preventDefault();
+                            setAcIndex((i) => (i - 1 + visibleAcItems.length) % visibleAcItems.length);
+                            return;
+                          }
+                          if (e.key === "Enter" || e.key === "Tab") {
+                            e.preventDefault();
+                            applyAcPick(visibleAcItems[acIndex] ?? visibleAcItems[0]);
+                            return;
+                          }
+                          if (e.key === "Escape") {
+                            e.preventDefault();
+                            setAcDismissed(true);
+                            return;
+                          }
+                        }
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
                           submit();
@@ -1837,6 +2040,7 @@ export default function App() {
           )}
         </main>
       </div>
+      <CommandPalette open={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
     </div>
   );
 }

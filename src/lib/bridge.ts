@@ -127,6 +127,11 @@ export const respondPermission = (tabId: string, requestId: number, optionId: st
 export const respondHook = (tabId: string, toolUseId: string, allow: boolean) =>
   invoke<void>("respond_hook", { tabId, toolUseId, allow });
 
+/// Files under `cwd` for @-mention autocomplete, as cwd-relative forward-slash
+/// paths. Dotdirs, `.git`, `node_modules`, `target`, `dist`, `.next`, `build`,
+/// `.venv`, `__pycache__` are skipped; depth and count are capped Rust-side.
+export const listProjectFiles = (cwd: string) => invoke<string[]>("list_project_files", { cwd });
+
 // ---- ACP session/update payloads (Rust -> webview) ----
 // Shapes verified against grok 0.2.101's `initialize` response.
 
@@ -136,7 +141,17 @@ export type SessionUpdateKind =
   | "tool_call"
   | "tool_call_update"
   | "plan"
-  | "user_message_chunk";
+  | "user_message_chunk"
+  | "available_commands_update";
+
+/// One slash-command grok advertises for the current session, carried on an
+/// `available_commands_update`. `input.hint` (when present) is a short
+/// placeholder for the argument text, e.g. "<query>" — display-only.
+export interface AvailableCommand {
+  name: string;
+  description?: string;
+  input?: { hint?: string };
+}
 
 export interface ContentBlock {
   type: string;
@@ -173,6 +188,9 @@ export interface SessionUpdate {
   _meta?: Record<string, unknown>;
   // plan
   entries?: { content: string; status?: string; priority?: string }[];
+  // available_commands_update — grok's advertised slash commands for this
+  // session. Session metadata, not a renderable Item: consumed live only.
+  availableCommands?: AvailableCommand[];
 }
 
 export interface AcpUpdate {

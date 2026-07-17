@@ -125,6 +125,8 @@ always `git diff` and undo.
 - [x] Code-signed + notarized macOS builds (no Gatekeeper warning) — v0.8.2
 - [x] Expandable tool cards driven by x.ai/tool metadata, plus syntax-highlighted code
   blocks with copy — v0.9.0
+- [x] Command palette (Cmd/Ctrl+K), slash-command palette from available_commands_update, and
+  @-mention file autocomplete — v0.9.1
 
 Not yet, on the list:
 

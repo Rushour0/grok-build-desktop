@@ -5,7 +5,7 @@ Agent Client Protocol (ACP) over the child's stdio, and forwards the live sessio
 webview. Independent and unofficial: it drives the upstream CLI at runtime and does not
 redistribute it. See `NOTICE`.
 
-Current version: **0.9.0**.
+Current version: **0.9.1**.
 
 ```text
 webview (React)  --invoke-->  Rust host  --stdin-->   grok agent stdio
@@ -195,11 +195,16 @@ deleted transcript mode (`.content-header`, `.content-actions`, `.history-state`
    semantic kind, read-only flag, canonical input, locations) replacing the flat tool pill,
    plus syntax-highlighted code blocks (highlight.js, class-based, CSP-safe) with a copy
    button in the transcript's Markdown rendering.
+0a. **Shipped in v0.9.1:** command palette (Cmd/Ctrl+K), slash-command palette from
+   `available_commands_update`, and @-mention file autocomplete. Invocation is unchanged — the
+   composer draft is still sent verbatim via `sendPrompt`; picking a slash command or file just
+   inserts text into the draft.
 1. The one refactor above (kills four bugs).
-2. Surface grok's own capabilities — it advertises `available_commands` the app currently
-   receives and ignores: `/compact`, `/context`, `/session-info`, and `/always-approve`
-   ("skip all permission prompts"). Note that toggles **grok's** prompts, not this app's hook —
-   they are two different switches and conflating them would be a safety bug.
+2. ~~Surface grok's own capabilities — it advertises `available_commands`~~ — the slash-command
+   piece is done (see 0a). Remaining: exposing `/compact`, `/context`, `/session-info`, and
+   `/always-approve` as first-class UI affordances beyond the raw slash-command autocomplete.
+   Note `/always-approve` toggles **grok's** prompts, not this app's hook — they are two
+   different switches and conflating them would be a safety bug.
 3. Reasoning-effort picker: `supportsReasoningEffort` with `[high, medium, low]`, persisted per
    session as `reasoning_effort` (default `high` — the biggest token lever there is). A *model*
    picker is pointless: `availableModels` has exactly one entry.

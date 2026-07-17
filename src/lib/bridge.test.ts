@@ -18,12 +18,14 @@ vi.mock("@tauri-apps/api/webviewWindow", () => ({
 }));
 
 import {
+  type AvailableCommand,
   authStatus,
   authenticate,
   busySessions,
   cancelRun,
   connect,
   installGrok,
+  listProjectFiles,
   listSessions,
   loadSession,
   openProject,
@@ -33,6 +35,7 @@ import {
   respondHook,
   respondPermission,
   searchSessions,
+  type SessionUpdate,
   sendPrompt,
   shutdownAll,
   subscribe,
@@ -195,6 +198,11 @@ describe("commands: name and argument contract", () => {
       allow: false,
     });
   });
+
+  it("list_project_files passes cwd", async () => {
+    await listProjectFiles("/repo/app");
+    expect(invoke).toHaveBeenCalledWith("list_project_files", { cwd: "/repo/app" });
+  });
 });
 
 describe("commands: results and failures pass through untouched", () => {
@@ -313,6 +321,27 @@ describe("subscribe: event routing", () => {
     const h = spyHandlers();
     await subscribe(h);
     const update = { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } };
+    capture.emit("acp-update", { tabId: "tab-1", sessionId: "s1", update });
+    expect(h.onUpdate).toHaveBeenCalledWith("tab-1", update);
+  });
+
+  it("routes an available_commands_update, typing accepts availableCommands", async () => {
+    // Compile-time contract: SessionUpdateKind includes "available_commands_update"
+    // and SessionUpdate carries an optional AvailableCommand[] under
+    // `availableCommands`. If either typing regresses this literal stops
+    // type-checking; the runtime assertion below pins that it still flows
+    // through `subscribe` untouched, same as any other update.
+    const commands: AvailableCommand[] = [
+      { name: "plan", description: "Draft a plan", input: { hint: "<goal>" } },
+      { name: "review" },
+    ];
+    const update: SessionUpdate = {
+      sessionUpdate: "available_commands_update",
+      availableCommands: commands,
+    };
+    const capture = captureListeners();
+    const h = spyHandlers();
+    await subscribe(h);
     capture.emit("acp-update", { tabId: "tab-1", sessionId: "s1", update });
     expect(h.onUpdate).toHaveBeenCalledWith("tab-1", update);
   });
