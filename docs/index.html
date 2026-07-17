@@ -106,23 +106,30 @@
 
     .button {
       display: inline-flex;
-      min-height: 2.875rem;
+      min-height: 3.15rem;
       align-items: center;
       justify-content: center;
-      padding: 0.72rem 1.2rem;
+      padding: 0.8rem 1.7rem;
       border: 1px solid var(--button);
-      border-radius: 0.42rem;
+      border-radius: 0.5rem;
       background: var(--button);
       color: var(--button-text);
-      font-size: 0.9rem;
-      font-weight: 650;
+      font-size: 0.98rem;
+      font-weight: 680;
+      letter-spacing: -0.005em;
       text-decoration: none;
-      transition: background-color 160ms ease, color 160ms ease;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 8px 24px -12px rgba(0, 0, 0, 0.35);
+      transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease,
+        color 160ms ease;
     }
 
     .button:hover {
-      background: transparent;
-      color: var(--text);
+      transform: translateY(-1px);
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1), 0 14px 30px -12px rgba(0, 0, 0, 0.45);
+    }
+
+    .button:active {
+      transform: translateY(0);
     }
 
     .text-link {
@@ -450,9 +457,10 @@
           <h1>Tell Grok. Watch files change.</h1>
           <p class="lede">Grok Build Desktop turns xAI&rsquo;s coding-agent CLI into a simple desktop app: pick a folder, describe the work, and follow every edit.</p>
           <div class="actions">
-            <a class="button" href="https://github.com/Rushour0/grok-build-desktop/releases/latest">Download</a>
+            <a class="button" href="https://github.com/Rushour0/grok-build-desktop/releases/latest">Download for macOS</a>
+            <a class="text-link" href="https://github.com/Rushour0/grok-build-desktop/releases/latest">Windows &amp; Linux</a>
             <a class="text-link" href="https://github.com/Rushour0/grok-build-desktop">View on GitHub</a>
-            <p class="build-note">Early, unsigned builds. Your OS may warn on first open.</p>
+            <p class="build-note">macOS builds are signed &amp; notarized &mdash; drag to Applications and open. Windows may warn on first launch.</p>
           </div>
         </div>
 

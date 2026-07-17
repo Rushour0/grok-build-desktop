@@ -1,9 +1,22 @@
-# Grok Build Desktop
+<h1 align="center">Grok Build Desktop</h1>
 
-<img width="1063" height="736" alt="Screenshot 2026-07-16 at 5 49 37 AM" src="https://github.com/user-attachments/assets/0a8efbf6-c3ec-4d4e-9f6c-c89980ab14ae" />
+<p align="center"><strong>Grok's coding agent — xAI's open-source <a href="https://github.com/xai-org/grok-build">Grok Build</a> — without the terminal.</strong></p>
 
+<p align="center">
+  <a href="https://grok.rushour0.com"><img src="https://img.shields.io/badge/Download%20for%20macOS-111111?style=for-the-badge&logo=apple&logoColor=white" alt="Download Grok Build Desktop for macOS" height="46"></a>
+</p>
 
-**A GUI for [Grok Build](https://github.com/xai-org/grok-build) — for the rest of us.**
+<p align="center">
+  <a href="https://grok.rushour0.com"><strong>grok.rushour0.com</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://github.com/Rushour0/grok-build-desktop/releases/latest">All installers — macOS · Windows · Linux</a>
+  &nbsp;·&nbsp;
+  <a href="#run-it-from-source">Build from source</a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/app-dark.png" alt="Grok Build Desktop — a project open in the app, ready for a prompt" width="860">
+</p>
 
 xAI open-sourced Grok Build, their coding agent. It's genuinely good. It's also a
 terminal app, which means most people can't use it.
@@ -11,9 +24,6 @@ terminal app, which means most people can't use it.
 This is a small desktop app that fixes that. Download it, click **Install Grok Build**,
 click **Sign in**, pick a folder, and type what you want in plain English. No terminal,
 no `npm install`, no API keys to hunt down, no config files.
-
-**[Download the latest release](https://github.com/Rushour0/grok-build-desktop/releases/latest)**
-— macOS, Windows, and Linux installers.
 
 **macOS** builds are signed and notarized as of v0.8.2 — drag to Applications and
 double-click. No `xattr`, no right-click trick. (Releases before v0.8.2 were unsigned and
@@ -33,7 +43,14 @@ latest instead.)
   from xAI's official installer. You never open a terminal.
 - **Signs you in.** One "Sign in with Grok" button, browser handles the rest.
 - **Works on a folder you pick.** Native folder picker instead of `cd`.
-- **Shows the work.** Streamed answers, live tool cards as the agent reads and edits files.
+- **Shows the work.** Streamed answers, live tool cards as the agent reads and edits files,
+  a running plan, and per-turn token usage — all in a monochrome UI with subtle depth and
+  motion that stays out of the way.
+
+<p align="center">
+  <img src="docs/screenshots/launcher-dark.png" alt="The launcher — open a project folder, or reopen a recent one, with search across every past conversation" width="860">
+</p>
+<p align="center"><em>The launcher: pick a folder or reopen a recent project; every window is one project.</em></p>
 
 ## How it works
 
