@@ -267,7 +267,10 @@ function connectLineFor(tab: Tab): string | null {
 /// under 1.5s there's nothing to report and a flash would be noise.
 function authLine(tab: Tab): string | null {
   if (tab.authPending === "browser") return "A browser window will open — finish signing in there.";
-  if (tab.authPending === "opening") return connectLineFor(tab) ?? "Opening your project…";
+  // `finishSignIn` arms `beginConnect` in the same breath as `opening`, so this
+  // fallback covers the 400ms before the gate opens. It has to be the line the
+  // gate then falls back to, or the wait renames itself mid-flight.
+  if (tab.authPending === "opening") return connectLineFor(tab) ?? "Connecting to your project…";
   return null;
 }
 
