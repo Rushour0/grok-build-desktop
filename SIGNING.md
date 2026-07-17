@@ -1,41 +1,76 @@
 # Code signing (macOS)
 
-Right now the macOS builds are **unsigned** (ad-hoc only). When you download an
-unsigned `.dmg`, macOS quarantines it and — on Apple Silicon especially — refuses
-to open it with **"Grok Build Desktop is damaged and can't be opened."** The app
-isn't damaged; that's Gatekeeper rejecting an un-notarized, quarantined app.
+**Status: macOS builds are signed + notarized as of v0.8.2.** They open on a
+double-click with no warning and no `xattr`. Windows is still unsigned — see the
+bottom of this file.
 
-There are two ways to deal with it: the interim user workaround, and the real fix
-(Developer ID + notarization).
-
-## Interim workaround (for the current unsigned builds)
-
-Tell macOS users to strip the quarantine flag after dragging the app to
-Applications:
+Releases **before v0.8.2** were unsigned. macOS quarantines an unsigned `.dmg` and
+— on Apple Silicon especially — refuses to open it with **"Grok Build Desktop is
+damaged and can't be opened."** The app isn't damaged; that's Gatekeeper rejecting
+an un-notarized, quarantined app. If you're stuck on one of those old builds, strip
+the quarantine flag after dragging to Applications:
 
 ```sh
 xattr -cr "/Applications/Grok Build Desktop.app"
 ```
 
-Then it opens normally. (The old "right-click → Open" trick does **not** clear the
-"damaged" error on Apple Silicon — this does.)
+(The "right-click → Open" trick does **not** clear the "damaged" error on Apple
+Silicon — this does.) The real fix is just to download v0.8.2 or later.
 
-## The real fix — sign + notarize (removes the warning for everyone)
+The rest of this file documents the setup, for reference and for whoever renews the
+certificate in 2031.
+
+## How it was set up — Developer ID + notarization
 
 This needs the **Apple Developer Program** ($99/yr) — there is no free path that
 Gatekeeper trusts. A self-signed certificate does **not** work for distribution.
 
 ### 1. Get a Developer ID Application certificate
 
-1. Enroll at <https://developer.apple.com> ($99/yr).
-2. In Xcode: **Settings → Accounts → (your account) → Manage Certificates → + →
-   Developer ID Application**. (Must be *Developer ID Application* — not "Apple
-   Distribution" or "Mac App Store"; those are App-Store-only.)
-3. Confirm it's installed:
-   ```sh
-   security find-identity -v -p codesigning
-   # look for: "Developer ID Application: Your Name (TEAMID)"
-   ```
+Either let Xcode do it (**Settings → Accounts → Manage Certificates → + →
+Developer ID Application**), or generate the keypair yourself and upload a CSR to
+<https://developer.apple.com/account/resources/certificates>:
+
+```sh
+openssl req -new -newkey rsa:2048 -nodes \
+  -keyout developer-id.key \
+  -out developer-id.certSigningRequest \
+  -subj "/emailAddress=you@example.com/CN=Your Name/C=IN"
+```
+
+Two traps on the portal:
+
+- The type must be **Developer ID Application** — not "Apple Distribution" or
+  "Mac App Store". Despite the name, "Apple Distribution" is App-Store-only and
+  Gatekeeper will **not** trust it for a direct `.dmg` download.
+- On the intermediary screen, pick **G2 Sub-CA**, not the pre-selected "Previous
+  Sub-CA" — certs on the old Sub-CA expire **Feb 01, 2027** regardless of their
+  own validity dates.
+
+Download the issued `.cer`, then bundle it with your key:
+
+```sh
+openssl x509 -in developerID_application.cer -inform DER -out developer-id.pem
+openssl pkcs12 -export -legacy -inkey developer-id.key -in developer-id.pem \
+  -out developer-id.p12 -name "Developer ID Application: Your Name (TEAMID)"
+security import developer-id.p12 -k ~/Library/Keychains/login.keychain-db \
+  -T /usr/bin/codesign
+```
+
+Confirm it's installed:
+
+```sh
+security find-identity -v -p codesigning
+# look for: "Developer ID Application: Your Name (TEAMID)"
+```
+
+If that says **`0 valid identities found`**, the Developer ID G2 intermediate is
+missing from your keychain and the chain can't reach a trusted root. Fix:
+
+```sh
+curl -fsSLO https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+security import DeveloperIDG2CA.cer -k ~/Library/Keychains/login.keychain-db
+```
 
 ### 2. Export it and encode it for CI
 

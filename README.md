@@ -13,16 +13,15 @@ click **Sign in**, pick a folder, and type what you want in plain English. No te
 no `npm install`, no API keys to hunt down, no config files.
 
 **[Download the latest release](https://github.com/Rushour0/grok-build-desktop/releases/latest)**
-— macOS, Windows, and Linux installers. Builds are **unsigned**, so your OS warns on first
-open. On **macOS**, if you see *"Grok Build Desktop is damaged and can't be opened,"* that's
-Gatekeeper rejecting an unsigned download — the app is fine. Drag it to Applications, then run:
+— macOS, Windows, and Linux installers.
 
-```sh
-xattr -cr "/Applications/Grok Build Desktop.app"
-```
+**macOS** builds are signed and notarized as of v0.8.2 — drag to Applications and
+double-click. No `xattr`, no right-click trick. (Releases before v0.8.2 were unsigned and
+will still fail with *"Grok Build Desktop is damaged and can't be opened"* — download the
+latest instead.)
 
-and open it. (See [SIGNING.md](SIGNING.md) — signed + notarized builds, which remove this
-step entirely, are coming once code-signing certs are in place.)
+**Windows** builds are still unsigned, so SmartScreen warns on first open: click
+**More info → Run anyway**. See [SIGNING.md](SIGNING.md).
 
 > **Status: early.** The app installs the CLI, signs you in, opens a folder, and streams
 > real answers and live tool activity back. See [Known limits](#known-limits) before you
@@ -96,17 +95,19 @@ always `git diff` and undo.
 - [x] **Approval before edits** — via a `PreToolUse` hook bridged back to the app
   (default-deny hook; macOS/Linux, experimental on Windows; best-effort, fails open)
 - [x] Plan timeline — the agent's plan streams into the transcript as it works
-- [ ] Run history, cost display
+- [x] Run history in a persistent sidebar, with search across past sessions
+- [x] File drop into prompts — drag files onto the composer to attach them
+- [x] Tabbed parallel runs
+- [x] System tray
+- [x] Per-turn and cumulative token usage
 - [x] Approval on Windows (experimental, unverified)
-- [ ] Code-signed builds (no Gatekeeper/SmartScreen warning)
-- [ ] Optional `XAI_API_KEY` sign-in for people using API credits
+- [x] Code-signed + notarized macOS builds (no Gatekeeper warning) — v0.8.2
 
 Not yet, on the list:
 
-- [ ] Persistent chat history and search
-- [ ] File drop into prompts
-- [ ] Tabbed parallel runs
-- [ ] System tray
+- [ ] Cost display — token counts are shown, but not converted to currency
+- [ ] Code-signed Windows builds (no SmartScreen warning)
+- [ ] Optional `XAI_API_KEY` sign-in for people using API credits
 
 ## Credits
 

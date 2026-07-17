@@ -167,9 +167,9 @@ jobs:
             > first. Point it at a folder under version control so you can undo.
             > See "Known limits" in the README.
 
-            > These builds are not code-signed yet, so macOS Gatekeeper and
-            > Windows SmartScreen will warn on first open. On macOS:
-            > right-click the app → Open. Signing is on the roadmap.
+            > **macOS** builds are signed and notarized — just drag to Applications
+            > and double-click. **Windows** builds are not signed yet, so SmartScreen
+            > warns on first open: click **More info → Run anyway**.
           # Every matrix leg contributes assets (and its updater entry) to the
           # same draft. The publish job promotes it only after all legs succeed.
           releaseDraft: true
