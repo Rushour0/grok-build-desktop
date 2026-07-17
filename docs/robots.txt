@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://grok.rushour0.com/sitemap.xml

@@ -3,515 +3,281 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Grok Build Desktop gives xAI's grok coding-agent CLI a clear, local desktop interface.">
-  <meta name="color-scheme" content="light dark">
-  <title>Grok Build Desktop</title>
+  <title>Grok Build Desktop — Desktop GUI for xAI's Grok Build coding agent</title>
+  <meta name="description" content="Download Grok Build Desktop — a fast, free desktop app that gives xAI's open-source Grok Build coding agent a clean GUI. No terminal, no setup. macOS, Windows &amp; Linux installers.">
+  <meta name="keywords" content="Grok Build, Grok Build Desktop, xAI, Grok, AI coding agent, coding assistant, desktop app, GUI, Tauri, no terminal, macOS, Windows, Linux, developer tools, code generation, agentic coding, download">
+  <link rel="canonical" href="https://grok.rushour0.com/">
+  <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+  <meta name="googlebot" content="index, follow">
+  <meta name="author" content="Rushikesh Patade">
+  <meta name="application-name" content="Grok Build Desktop">
+  <meta name="apple-mobile-web-app-title" content="Grok Build Desktop">
+  <meta name="theme-color" content="#05070a">
+  <meta name="color-scheme" content="dark">
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Grok Build Desktop">
+  <meta property="og:title" content="Grok Build Desktop — a GUI for xAI's Grok Build coding agent">
+  <meta property="og:description" content="A fast, free desktop app for xAI's open-source Grok Build coding agent. Pick a folder, describe the mission, watch every edit. No terminal. macOS, Windows &amp; Linux.">
+  <meta property="og:url" content="https://grok.rushour0.com/">
+  <meta property="og:image" content="https://grok.rushour0.com/og.png">
+  <meta property="og:image:secure_url" content="https://grok.rushour0.com/og.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Grok Build Desktop — a cinematic launch console with a rocket, for the downloadable Grok Build coding-agent desktop app">
+  <meta property="og:locale" content="en_US">
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Grok Build Desktop — a GUI for xAI's Grok Build coding agent">
+  <meta name="twitter:description" content="A fast, free desktop app for xAI's Grok Build coding agent. No terminal. macOS, Windows &amp; Linux.">
+  <meta name="twitter:image" content="https://grok.rushour0.com/og.png">
+  <meta name="twitter:image:alt" content="Grok Build Desktop launch console">
+  <meta name="twitter:creator" content="@Rushour0">
+  <meta name="twitter:site" content="@Rushour0">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2305070a'/%3E%3Cpath d='M16 5c3.6 2.7 5.2 6.4 5.2 10.7 0 2.3-.5 4.3-1.4 6.1h-7.6c-.9-1.8-1.4-3.8-1.4-6.1C10.8 11.4 12.4 7.7 16 5z' fill='%23f2f7fb'/%3E%3Ccircle cx='16' cy='13' r='2.1' fill='%2359c9ff'/%3E%3Cpath d='M12.4 21.8 10.3 25l2.9-1.1zM19.6 21.8 21.7 25l-2.9-1.1z' fill='%23b7c2ca'/%3E%3Cpath d='M14.2 22h3.6l-1.8 5z' fill='%2359c9ff'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
+  <link rel="sitemap" type="application/xml" href="/sitemap.xml">
+  <link rel="dns-prefetch" href="https://api.github.com">
+  <link rel="preconnect" href="https://api.github.com" crossorigin>
+  <link rel="preconnect" href="https://github.com">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@graph":[
+    {"@type":"SoftwareApplication","name":"Grok Build Desktop","operatingSystem":"macOS, Windows, Linux","applicationCategory":"DeveloperApplication","description":"A desktop GUI for xAI's open-source Grok Build coding agent. Pick a folder, describe the work in plain English, and watch every edit. No terminal required.","url":"https://grok.rushour0.com/","downloadUrl":"https://github.com/Rushour0/grok-build-desktop/releases/latest","softwareVersion":"0.8.8","image":"https://grok.rushour0.com/og.png","screenshot":"https://grok.rushour0.com/og.png","license":"https://www.apache.org/licenses/LICENSE-2.0","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"author":{"@type":"Person","name":"Rushikesh Patade","url":"https://github.com/Rushour0"},"publisher":{"@type":"Person","name":"Rushikesh Patade"}},
+    {"@type":"WebSite","name":"Grok Build Desktop","url":"https://grok.rushour0.com/","inLanguage":"en","publisher":{"@type":"Person","name":"Rushikesh Patade"}}
+  ]}
+  </script>
   <style>
-    :root {
-      color-scheme: light;
-      --background: #f5f4f0;
-      --surface: #fbfaf7;
-      --text: #171816;
-      --muted: #62645f;
-      --faint: #8b8d86;
-      --line: #d7d7d0;
-      --line-strong: #bfc0b9;
-      --button: #171816;
-      --button-text: #f8f8f4;
-      --accent: #55715e;
-      --selection: #dce5de;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    html {
-      scroll-behavior: smooth;
-    }
-
-    body {
-      margin: 0;
-      overflow-x: hidden;
-      background: var(--background);
-      color: var(--text);
-      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      font-size: 16px;
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
-      text-rendering: optimizeLegibility;
-    }
-
-    ::selection {
-      background: var(--selection);
-    }
-
-    a {
-      color: inherit;
-    }
-
-    .shell {
-      width: min(100% - 2.5rem, 78rem);
-      margin-inline: auto;
-    }
-
-    .hero {
-      display: grid;
-      min-height: 100svh;
-      align-items: center;
-      padding-block: clamp(4.5rem, 9vh, 8rem);
-    }
-
-    .hero-layout {
-      display: grid;
-      grid-template-columns: minmax(0, 0.88fr) minmax(28rem, 1.12fr);
-      gap: clamp(4rem, 8vw, 8.5rem);
-      align-items: center;
-    }
-
-    .wordmark {
-      margin: 0 0 2rem;
-      color: var(--muted);
-      font-size: 0.75rem;
-      font-weight: 650;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-
-    h1 {
-      max-width: 10ch;
-      margin: 0;
-      font-size: clamp(3.25rem, 6vw, 6.4rem);
-      font-weight: 620;
-      letter-spacing: -0.058em;
-      line-height: 0.98;
-      text-wrap: balance;
-    }
-
-    .lede {
-      max-width: 35rem;
-      margin: 1.75rem 0 0;
-      color: var(--muted);
-      font-size: clamp(1rem, 1.35vw, 1.16rem);
-      line-height: 1.65;
-    }
-
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 1rem 1.5rem;
-      margin-top: 2.25rem;
-    }
-
-    .button {
-      display: inline-flex;
-      min-height: 3.15rem;
-      align-items: center;
-      justify-content: center;
-      padding: 0.8rem 1.7rem;
-      border: 1px solid var(--button);
-      border-radius: 0.5rem;
-      background: var(--button);
-      color: var(--button-text);
-      font-size: 0.98rem;
-      font-weight: 680;
-      letter-spacing: -0.005em;
-      text-decoration: none;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 8px 24px -12px rgba(0, 0, 0, 0.35);
-      transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease,
-        color 160ms ease;
-    }
-
-    .button:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1), 0 14px 30px -12px rgba(0, 0, 0, 0.45);
-    }
-
-    .button:active {
-      transform: translateY(0);
-    }
-
-    .text-link {
-      padding-block: 0.4rem;
-      border-bottom: 1px solid var(--line-strong);
-      color: var(--muted);
-      font-size: 0.9rem;
-      font-weight: 560;
-      text-decoration: none;
-      transition: border-color 160ms ease, color 160ms ease;
-    }
-
-    .text-link:hover {
-      border-color: var(--text);
-      color: var(--text);
-    }
-
-    .button:focus-visible,
-    .text-link:focus-visible,
-    .footer a:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 4px;
-    }
-
-    .build-note {
-      flex-basis: 100%;
-      margin: -0.15rem 0 0;
-      color: var(--faint);
-      font-size: 0.72rem;
-    }
-
-    .demo {
-      position: relative;
-      width: 100%;
-      margin: 0;
-      overflow: hidden;
-      border: 1px solid var(--line-strong);
-      border-radius: 0.65rem;
-      background: var(--surface);
-    }
-
-    .window-bar {
-      display: flex;
-      min-height: 3rem;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0.75rem 1rem;
-      border-bottom: 1px solid var(--line);
-      color: var(--faint);
-      font-size: 0.68rem;
-      letter-spacing: 0.02em;
-    }
-
-    .window-title {
-      color: var(--muted);
-      font-weight: 650;
-    }
-
-    .local-state {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.45rem;
-    }
-
-    .local-state::before {
-      width: 0.36rem;
-      height: 0.36rem;
-      border-radius: 50%;
-      background: var(--accent);
-      content: "";
-    }
-
-    .demo-body {
-      min-height: 24rem;
-      padding: clamp(1.3rem, 3vw, 2.25rem);
-    }
-
-    .label {
-      margin: 0 0 0.65rem;
-      color: var(--faint);
-      font-size: 0.62rem;
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-    }
-
-    .request {
-      margin: 0;
-      padding: 1rem 1.05rem;
-      border: 1px solid var(--line);
-      border-radius: 0.38rem;
-      color: var(--text);
-      font-family: inherit;
-      font-size: 0.9rem;
-      line-height: 1.55;
-    }
-
-    .working {
-      display: flex;
-      align-items: center;
-      gap: 0.55rem;
-      margin: 2rem 0 0.8rem;
-      color: var(--muted);
-      font-size: 0.72rem;
-    }
-
-    .working::before {
-      width: 0.42rem;
-      height: 0.42rem;
-      border: 1px solid var(--accent);
-      background: var(--accent);
-      content: "";
-    }
-
-    .files {
-      margin: 0;
-      padding: 0;
-      border-top: 1px solid var(--line);
-      list-style: none;
-    }
-
-    .file {
-      display: flex;
-      min-width: 0;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1rem;
-      padding: 0.95rem 0.15rem;
-      border-bottom: 1px solid var(--line);
-      animation: reveal-change 4s ease-in-out infinite;
-    }
-
-    .file:nth-child(2) {
-      animation-delay: 320ms;
-    }
-
-    .file-name {
-      min-width: 0;
-      overflow: hidden;
-      color: var(--muted);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.72rem;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .edited {
-      flex: 0 0 auto;
-      color: var(--accent);
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 0.64rem;
-      font-weight: 700;
-      letter-spacing: 0.025em;
-      text-transform: uppercase;
-    }
-
-    @keyframes reveal-change {
-      0%, 12% {
-        opacity: 0;
-        transform: translateY(0.35rem);
-      }
-      28%, 86% {
-        opacity: 1;
-        transform: translateY(0);
-      }
-      100% {
-        opacity: 0;
-        transform: translateY(0);
-      }
-    }
-
-    .values {
-      padding-block: clamp(6rem, 12vw, 10rem);
-      border-top: 1px solid var(--line);
-    }
-
-    .value-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: clamp(2.5rem, 6vw, 6rem);
-    }
-
-    .value {
-      border-top: 1px solid var(--line-strong);
-      padding-top: 1.35rem;
-    }
-
-    .value h2 {
-      margin: 0;
-      font-size: 0.96rem;
-      font-weight: 650;
-      letter-spacing: -0.01em;
-    }
-
-    .value p {
-      max-width: 20rem;
-      margin: 0.8rem 0 0;
-      color: var(--muted);
-      font-size: 0.86rem;
-      line-height: 1.7;
-    }
-
-    .footer {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 1.5rem 3rem;
-      padding-block: 2rem;
-      border-top: 1px solid var(--line);
-      color: var(--faint);
-      font-size: 0.72rem;
-    }
-
-    .footer p {
-      margin: 0;
-    }
-
-    .footer-links {
-      display: flex;
-      gap: 1.25rem;
-      white-space: nowrap;
-    }
-
-    .footer a {
-      text-underline-offset: 0.22em;
-    }
-
-    @media (prefers-color-scheme: dark) {
-      :root {
-        color-scheme: dark;
-        --background: #10110f;
-        --surface: #151614;
-        --text: #f0f0eb;
-        --muted: #a5a79f;
-        --faint: #72746e;
-        --line: #292b27;
-        --line-strong: #3b3d38;
-        --button: #f0f0eb;
-        --button-text: #10110f;
-        --accent: #8ca995;
-        --selection: #344139;
-      }
-    }
-
-    @media (max-width: 880px) {
-      .hero-layout {
-        grid-template-columns: 1fr;
-        gap: 4rem;
-      }
-
-      .hero-copy {
-        max-width: 42rem;
-      }
-
-      h1 {
-        max-width: 11ch;
-      }
-
-      .demo {
-        max-width: 42rem;
-      }
-    }
-
-    @media (max-width: 620px) {
-      .shell {
-        width: min(100% - 2rem, 78rem);
-      }
-
-      .hero {
-        padding-block: 4rem;
-      }
-
-      .hero-layout {
-        gap: 3.5rem;
-      }
-
-      .wordmark {
-        margin-bottom: 1.5rem;
-      }
-
-      h1 {
-        font-size: clamp(3rem, 15vw, 4.7rem);
-      }
-
-      .demo-body {
-        min-height: 21rem;
-      }
-
-      .value-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .footer {
-        align-items: flex-start;
-        flex-direction: column;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      html {
-        scroll-behavior: auto;
-      }
-
-      *,
-      *::before,
-      *::after {
-        scroll-behavior: auto !important;
-        transition: none !important;
-        animation: none !important;
-      }
-
-      .file {
-        opacity: 1;
-        transform: none;
-      }
-    }
+    :root { --void:#05070a; --ink:#f2f7fb; --muted:#a1adb7; --line:rgba(198,220,235,.2); --blue:#59c9ff; --blue-soft:rgba(89,201,255,.18); --panel:rgba(7,12,17,.72); }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; background:var(--void); }
+    body { min-width:320px; margin:0; overflow-x:hidden; background:var(--void); color:var(--ink); font-family:"Space Grotesk",Arial,sans-serif; -webkit-font-smoothing:antialiased; }
+    body::before { content:""; position:fixed; inset:0; pointer-events:none; z-index:-1; background:radial-gradient(ellipse 70% 36% at 75% 38%,rgba(27,100,137,.16),transparent 70%),linear-gradient(180deg,#05070a 0%,#071017 54%,#05070a 100%); }
+    a { color:inherit; }
+    :focus-visible { outline:2px solid var(--blue); outline-offset:4px; }
+    .stars { position:fixed; inset:0; z-index:-2; width:100%; height:100%; pointer-events:none; }
+    .shell { width:min(100% - 3rem, 78rem); margin:auto; }
+    .eyebrow,.telemetry,.platform-label { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.65rem; font-weight:600; letter-spacing:.16em; text-transform:uppercase; }
+    .eyebrow { display:flex; gap:.65rem; align-items:center; margin:0 0 1.45rem; color:#d5e4ed; }
+    .eyebrow::before { content:""; display:block; width:1.85rem; height:1px; background:var(--blue); box-shadow:0 0 10px var(--blue); }
+    .site-header { position:absolute; top:0; left:0; width:100%; padding:1.7rem 0; z-index:2; }
+    .header-inner { display:flex; justify-content:space-between; align-items:center; gap:1rem; }
+    .brand { color:var(--ink); font-size:.76rem; font-weight:700; letter-spacing:.08em; text-decoration:none; text-transform:uppercase; }
+    .header-link { color:var(--muted); font-size:.72rem; letter-spacing:.08em; text-decoration:none; text-transform:uppercase; transition:color .2s ease; }
+    .header-link:hover { color:var(--ink); }
+    .hero { position:relative; min-height:100svh; display:grid; align-items:center; padding:8.5rem 0 4rem; }
+    .hero-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(22rem,.82fr); align-items:center; gap:3rem; }
+    h1 { max-width:9ch; margin:0; font-size:clamp(3.7rem,8vw,7.5rem); font-weight:600; letter-spacing:-.075em; line-height:.86; text-wrap:balance; }
+    .lede { max-width:35rem; margin:1.6rem 0 0; color:var(--muted); font-size:clamp(1rem,1.5vw,1.16rem); line-height:1.65; }
+    .version { display:inline-flex; align-items:center; gap:.6rem; max-width:100%; margin-top:2rem; padding:.55rem .75rem; border:1px solid var(--line); background:rgba(6,14,20,.5); color:#c9d9e3; white-space:nowrap; }
+    .status-dot { width:.45rem; height:.45rem; flex:0 0 auto; border-radius:50%; background:var(--blue); box-shadow:0 0 10px var(--blue); }
+    .actions { display:flex; flex-wrap:wrap; gap:.85rem; align-items:center; margin-top:1.5rem; }
+    .download { display:inline-flex; min-height:4.05rem; align-items:center; gap:1rem; padding:.65rem 1rem  .65rem 1.3rem; background:var(--ink); color:#071016; font-weight:700; text-decoration:none; transition:transform .2s ease,box-shadow .2s ease; }
+    .download:hover { transform:translateY(-2px); box-shadow:0 10px 30px rgba(89,201,255,.22); }
+    .download-copy { display:grid; gap:.14rem; }
+    .download-sub { color:#53626b; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.61rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
+    .download-arrow { display:grid; width:2.2rem; height:2.2rem; place-items:center; background:#0c1820; color:var(--blue); }
+    .platforms-link { color:#d5e1e8; font-size:.78rem; font-weight:600; letter-spacing:.07em; text-decoration:none; text-transform:uppercase; }
+    .platforms-link:hover { color:var(--blue); }
+    .rocket-bay { position:relative; min-height:31rem; display:grid; place-items:center; isolation:isolate; }
+    .rocket-bay::before { content:""; position:absolute; z-index:0; width:min(92vw,32rem); aspect-ratio:1; border:1px solid rgba(141,202,232,.12); border-radius:50%; box-shadow:inset 0 0 100px rgba(47,141,189,.06),0 0 100px rgba(27,110,152,.08); }
+    .rocket-bay::after { content:""; position:absolute; z-index:0; width:78%; height:1px; bottom:12%; background:linear-gradient(90deg,transparent,var(--blue),transparent); box-shadow:0 0 18px var(--blue); opacity:.55; }
+    .rocket { position:relative; z-index:1; width:min(100%,24rem); overflow:visible; filter:drop-shadow(0 12px 28px rgba(0,0,0,.65)); animation:hover 5.5s ease-in-out infinite; }
+    .rocket:hover { animation-play-state:paused; transform:translateY(-7px) rotate(-1deg); }
+    .rocket-plume { transform-origin:210px 418px; animation:thrust .22s ease-in-out infinite alternate; }
+    .rocket-plume-core { transform-origin:210px 418px; animation:thrust .14s ease-in-out infinite alternate-reverse; }
+    .orbit { position:absolute; z-index:2; width:89%; aspect-ratio:1; border:1px solid rgba(108,197,237,.15); border-radius:50%; transform:rotateX(68deg) rotateZ(-22deg); }
+    .orbit i { position:absolute; top:50%; left:-.2rem; width:.4rem; height:.4rem; border-radius:50%; background:var(--blue); box-shadow:0 0 12px var(--blue); animation:orbit 7s linear infinite; }
+    .telemetry-card { position:absolute; z-index:2; right:0; bottom:4%; width:10.5rem; padding:.75rem; border-left:1px solid var(--blue); background:rgba(5,10,14,.72); color:#b8d6e4; line-height:1.8; }
+    .telemetry-card span { display:block; color:#71838d; }
+    .scroll-cue { position:absolute; bottom:1.75rem; left:50%; display:flex; gap:.6rem; align-items:center; color:#8799a4; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.59rem; letter-spacing:.15em; text-transform:uppercase; transform:translateX(-50%); }
+    .scroll-cue::after { content:"↓"; color:var(--blue); font-size:1rem; animation:cue 1.8s ease-in-out infinite; }
+    main { position:relative; }
+    section { padding:clamp(5.2rem,10vw,9rem) 0; }
+    .section-head { display:flex; justify-content:space-between; gap:2rem; align-items:end; padding-bottom:1.4rem; border-bottom:1px solid var(--line); }
+    h2 { max-width:12ch; margin:0; font-size:clamp(2.25rem,5vw,4.5rem); font-weight:500; letter-spacing:-.065em; line-height:.96; }
+    .section-mark { color:var(--blue); }
+    .value-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:0; border-bottom:1px solid var(--line); }
+    .value { min-height:17rem; padding:2rem 1.5rem 1.5rem 0; border-right:1px solid var(--line); }
+    .value:not(:first-child) { padding-left:1.5rem; }
+    .value:last-child { border-right:0; }
+    .value-no { color:var(--blue); }
+    .value h3 { margin:4.5rem 0 1rem; font-size:1.27rem; letter-spacing:-.035em; }
+    .value p { max-width:19rem; margin:0; color:var(--muted); font-size:.95rem; line-height:1.6; }
+    .download-section { position:relative; border-top:1px solid var(--line); border-bottom:1px solid var(--line); background:linear-gradient(105deg,rgba(11,31,42,.58),rgba(5,7,10,.2)); }
+    .download-layout { display:grid; grid-template-columns:1fr minmax(18rem,.8fr); gap:4rem; align-items:start; }
+    .note { margin:1.7rem 0 0; color:#bdcbd3; font-size:.86rem; line-height:1.65; }
+    details { border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+    summary { display:flex; align-items:center; justify-content:space-between; padding:1rem 0; cursor:pointer; color:#dce8ee; font-size:.78rem; font-weight:600; letter-spacing:.09em; list-style:none; text-transform:uppercase; }
+    summary::-webkit-details-marker { display:none; }
+    summary::after { content:"+"; color:var(--blue); font-size:1.25rem; font-weight:400; }
+    details[open] summary::after { content:"−"; }
+    .platform-list { display:grid; gap:1rem; padding:0 0 1.4rem; }
+    .platform-group { display:grid; gap:.45rem; }
+    .platform-label { color:#6f8793; }
+    .platform-group a { color:#d9e5eb; font-size:.88rem; text-decoration-color:rgba(89,201,255,.5); text-underline-offset:.25rem; }
+    .platform-group a:hover { color:var(--blue); }
+    .release-link { display:inline-block; margin-top:1.35rem; color:#bcddea; font-size:.75rem; letter-spacing:.08em; text-transform:uppercase; text-underline-offset:.3rem; }
+    .download-head { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:flex-end; gap:1.4rem 3rem; padding-bottom:2.6rem; }
+    .download-head h2 { margin:.7rem 0 0; }
+    .download-head .note { max-width:23rem; margin:0; }
+    .platform-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(14.5rem,1fr)); gap:.85rem; }
+    .platform-card { display:flex; flex-direction:column; min-height:10.5rem; padding:1.15rem 1.2rem 1.25rem; border:1px solid var(--line); background:linear-gradient(158deg,rgba(13,29,39,.5),rgba(6,10,14,.26)); color:var(--ink); text-decoration:none; transition:transform .22s ease,border-color .22s ease,box-shadow .22s ease,background .22s ease; }
+    .platform-card:hover { transform:translateY(-3px); border-color:rgba(89,201,255,.5); box-shadow:0 16px 38px rgba(2,7,11,.55); background:linear-gradient(158deg,rgba(16,39,53,.66),rgba(6,10,14,.32)); }
+    .platform-card:focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+    .pc-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:auto; }
+    .pc-i { width:1.7rem; height:1.7rem; color:#d5e6f0; fill:currentColor; }
+    .pc-arrow { display:grid; width:1.9rem; height:1.9rem; place-items:center; border:1px solid var(--line); color:#6f8793; font-size:.85rem; transition:color .22s ease,border-color .22s ease,background .22s ease; }
+    .platform-card:hover .pc-arrow { color:var(--blue); border-color:rgba(89,201,255,.5); background:rgba(89,201,255,.09); }
+    .pc-os { display:block; margin-top:1.4rem; }
+    .pc-title { margin:.5rem 0 0; font-size:1.06rem; font-weight:600; letter-spacing:-.02em; }
+    .pc-file { margin:.32rem 0 0; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.7rem; letter-spacing:.03em; color:#8ca3ae; }
+    .release-row { display:flex; justify-content:flex-end; margin-top:1.6rem; }
+    .release-row .release-link { margin-top:0; }
+    .ico { width:1.05em; height:1.05em; flex:0 0 auto; fill:currentColor; }
+    .header-link, .footer-links a, .release-link { display:inline-flex; align-items:center; gap:.45rem; }
+    .dl-ico { display:grid; place-items:center; margin-right:.15rem; }
+    .dl-ico svg { width:1.55rem; height:1.55rem; fill:currentColor; }
+    footer { padding:2.3rem 0 3rem; }
+    .footer-inner { display:flex; justify-content:space-between; gap:1.5rem; color:#83929a; font-size:.72rem; line-height:1.6; }
+    .footer-links { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:.65rem 1.25rem; }
+    .footer-links a { color:#bdcbd3; text-underline-offset:.25rem; }
+    [data-reveal] { opacity:0; transform:translateY(18px); transition:opacity .7s ease,transform .7s cubic-bezier(.2,.75,.2,1); }
+    [data-reveal].is-visible { opacity:1; transform:none; }
+    @keyframes hover { 50% { transform:translateY(-12px); } }
+    @keyframes thrust { to { transform:scaleY(1.13) scaleX(.94); opacity:.82; } }
+    @keyframes orbit { to { transform:rotate(360deg); } }
+    @keyframes cue { 50% { transform:translateY(4px); opacity:.45; } }
+    @media (max-width:760px) { .shell{width:min(100% - 2.25rem,78rem)} .hero{padding-top:7.5rem} .hero-grid,.download-layout{grid-template-columns:1fr;gap:2.5rem} .rocket-bay{min-height:25rem; order:-1} .rocket{width:17rem} .telemetry-card{right:2%;bottom:5%} .scroll-cue{display:none} .value-grid{grid-template-columns:1fr} .value,.value:not(:first-child){min-height:auto;padding:1.5rem 0;border-right:0;border-bottom:1px solid var(--line)} .value h3{margin:2rem 0 .7rem} .footer-inner{flex-direction:column} .footer-links{justify-content:flex-start} }
+    @media (max-width:420px) { h1{font-size:clamp(3.25rem,17vw,4.2rem)} .version{font-size:.56rem;letter-spacing:.08em} .download{width:100%;justify-content:space-between} .rocket-bay{min-height:21rem} .rocket{width:14rem} .telemetry-card{font-size:.54rem;width:8.7rem} }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none!important; transition:none!important; scroll-behavior:auto!important; } [data-reveal]{opacity:1;transform:none} .stars{display:none} }
   </style>
 </head>
 <body>
-  <main>
-    <section class="hero">
-      <div class="shell hero-layout">
-        <div class="hero-copy">
-          <p class="wordmark">Grok Build Desktop · Early</p>
-          <h1>Tell Grok. Watch files change.</h1>
-          <p class="lede">Grok Build Desktop turns xAI&rsquo;s coding-agent CLI into a simple desktop app: pick a folder, describe the work, and follow every edit.</p>
+  <canvas class="stars" aria-hidden="true"></canvas>
+  <header class="site-header"><div class="shell header-inner"><a class="brand" href="#top">Grok Build Desktop</a><a class="header-link" href="https://github.com/Rushour0/grok-build-desktop"><svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>GitHub</a></div></header>
+  <main id="top">
+    <section class="hero shell" aria-labelledby="hero-title">
+      <div class="hero-grid">
+        <div data-reveal>
+          <p class="eyebrow">Mission control / Desktop agent</p>
+          <h1 id="hero-title">Build at escape velocity.</h1>
+          <p class="lede">A native desktop launch console for xAI’s open-source Grok Build coding agent. Point it at your folder. Describe the mission. Watch the work happen.</p>
+          <div class="version telemetry" aria-live="polite"><i class="status-dot" aria-hidden="true"></i><span id="version-status">GROK BUILD DESKTOP · CHECKING STATUS</span></div>
           <div class="actions">
-            <a class="button" href="https://github.com/Rushour0/grok-build-desktop/releases/latest">Download for macOS</a>
-            <a class="text-link" href="https://github.com/Rushour0/grok-build-desktop/releases/latest">Windows &amp; Linux</a>
-            <a class="text-link" href="https://github.com/Rushour0/grok-build-desktop">View on GitHub</a>
-            <p class="build-note">macOS builds are signed &amp; notarized &mdash; drag to Applications and open. Windows may warn on first launch.</p>
+            <a class="download" id="primary-download" href="https://github.com/Rushour0/grok-build-desktop/releases/latest"><span class="dl-ico" aria-hidden="true"><svg id="dl-os-ico"><use href="#i-github"/></svg></span><span class="download-copy"><span id="download-label">Download</span><span class="download-sub" id="download-variant">Latest release</span></span><span class="download-arrow" aria-hidden="true">↓</span></a>
+            <a class="platforms-link" href="#platforms">All platforms ↓</a>
           </div>
         </div>
-
-        <figure class="demo" aria-label="A plain-English request followed by two edited files">
-          <div class="window-bar">
-            <span class="window-title">Grok Build Desktop</span>
-            <span class="local-state">Local folder</span>
-          </div>
-          <div class="demo-body">
-            <p class="label">Request</p>
-            <p class="request">add a dark mode toggle to the settings page</p>
-            <p class="working">Updating your project</p>
-            <ul class="files" aria-label="Changed files">
-              <li class="file">
-                <span class="file-name">src/settings/theme.tsx</span>
-                <span class="edited">edited</span>
-              </li>
-              <li class="file">
-                <span class="file-name">src/styles/settings.css</span>
-                <span class="edited">edited</span>
-              </li>
-            </ul>
-          </div>
-        </figure>
+        <div class="rocket-bay" aria-label="Illustration of a rocket in flight" data-reveal>
+          <div class="orbit" aria-hidden="true"><i></i></div>
+          <svg class="rocket" viewBox="0 0 420 620" role="img" aria-label="A sleek metallic launch vehicle climbing through an ion-blue atmospheric glow">
+            <defs>
+              <radialGradient id="hero-nebula" cx="50%" cy="43%" r="56%"><stop stop-color="#59c9ff" stop-opacity=".22"/><stop offset=".38" stop-color="#1c6b8d" stop-opacity=".11"/><stop offset="1" stop-color="#05070a" stop-opacity="0"/></radialGradient>
+              <radialGradient id="hero-window" cx="34%" cy="25%" r="70%"><stop stop-color="#e9fbff"/><stop offset=".24" stop-color="#8fe0ff"/><stop offset=".62" stop-color="#176887"/><stop offset="1" stop-color="#07131a"/></radialGradient>
+              <linearGradient id="hero-body" x1="132" y1="230" x2="289" y2="230" gradientUnits="userSpaceOnUse"><stop stop-color="#536873"/><stop offset=".18" stop-color="#bdcbd1"/><stop offset=".45" stop-color="#f2f7fb"/><stop offset=".7" stop-color="#aabcc4"/><stop offset="1" stop-color="#344851"/></linearGradient>
+              <linearGradient id="hero-nose" x1="164" y1="105" x2="262" y2="185" gradientUnits="userSpaceOnUse"><stop stop-color="#f7fbfd"/><stop offset=".43" stop-color="#d4e0e5"/><stop offset="1" stop-color="#536771"/></linearGradient>
+              <linearGradient id="hero-rim" x1="255" y1="140" x2="285" y2="370" gradientUnits="userSpaceOnUse"><stop stop-color="#c9f3ff" stop-opacity=".9"/><stop offset=".38" stop-color="#59c9ff" stop-opacity=".72"/><stop offset="1" stop-color="#59c9ff" stop-opacity="0"/></linearGradient>
+              <linearGradient id="hero-darkmetal" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#15232a"/><stop offset=".48" stop-color="#53636a"/><stop offset="1" stop-color="#0a1116"/></linearGradient>
+              <linearGradient id="hero-plume" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#eafcff" stop-opacity=".98"/><stop offset=".18" stop-color="#79d9ff" stop-opacity=".9"/><stop offset=".52" stop-color="#2596c6" stop-opacity=".42"/><stop offset="1" stop-color="#59c9ff" stop-opacity="0"/></linearGradient>
+              <linearGradient id="hero-core" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff"/><stop offset=".34" stop-color="#dff8ff"/><stop offset="1" stop-color="#59c9ff" stop-opacity="0"/></linearGradient>
+              <linearGradient id="hero-horizon" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#59c9ff" stop-opacity=".34"/><stop offset=".24" stop-color="#153d4e" stop-opacity=".22"/><stop offset="1" stop-color="#05070a" stop-opacity="0"/></linearGradient>
+              <filter id="hero-glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="12"/></filter>
+              <filter id="hero-soft-glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="4"/></filter>
+            </defs>
+            <rect width="420" height="620" fill="url(#hero-nebula)"/>
+            <g fill="#dff6ff"><circle cx="55" cy="91" r="1.2" opacity=".72"/><circle cx="102" cy="44" r=".7" opacity=".46"/><circle cx="333" cy="65" r="1.35" opacity=".78"/><circle cx="375" cy="164" r=".75" opacity=".48"/><circle cx="43" cy="281" r=".8" opacity=".52"/><circle cx="360" cy="302" r="1.1" opacity=".64"/><circle cx="76" cy="391" r="1.45" opacity=".55"/><circle cx="321" cy="414" r=".65" opacity=".63"/><circle cx="290" cy="126" r=".55" opacity=".47"/><circle cx="128" cy="174" r=".8" opacity=".34"/></g>
+            <ellipse cx="210" cy="578" rx="245" ry="78" fill="url(#hero-horizon)"/>
+            <path d="M-18 564 Q210 515 438 564" fill="none" stroke="#79d9ff" stroke-opacity=".42" stroke-width="1.2"/>
+            <ellipse cx="210" cy="435" rx="112" ry="152" fill="#59c9ff" opacity=".1" filter="url(#hero-glow)"/>
+            <g class="rocket-plume">
+              <path d="M180 408 C174 463 132 524 205 609 C283 522 248 462 241 408Z" fill="url(#hero-plume)" filter="url(#hero-soft-glow)" opacity=".92"/>
+              <path d="M192 411 C189 457 174 502 209 562 C244 503 229 456 226 411Z" fill="url(#hero-plume)"/>
+              <path class="rocket-plume-core" d="M202 413 C201 454 198 483 210 525 C223 484 221 453 219 413Z" fill="url(#hero-core)"/>
+            </g>
+            <g transform="rotate(-8 210 290)">
+              <path d="M150 333 L94 394 L151 373 L177 329Z" fill="url(#hero-darkmetal)" stroke="#6f858e" stroke-opacity=".45"/>
+              <path d="M270 333 L326 394 L269 373 L243 329Z" fill="url(#hero-darkmetal)" stroke="#6f858e" stroke-opacity=".45"/>
+              <path d="M145 327 C145 228 154 136 210 68 C266 136 275 228 275 327 C275 365 253 398 210 412 C167 398 145 365 145 327Z" fill="url(#hero-body)" stroke="#d8edf4" stroke-opacity=".45" stroke-width="1.2"/>
+              <path d="M145 327 C145 228 154 136 210 68 C184 154 181 276 187 392 C161 379 145 356 145 327Z" fill="#253943" opacity=".27"/>
+              <path d="M210 68 C266 136 275 228 275 327 C275 357 261 382 239 396" fill="none" stroke="url(#hero-rim)" stroke-width="5"/>
+              <path d="M164 130 Q210 81 256 130 Q235 102 210 79 Q184 102 164 130Z" fill="url(#hero-nose)" opacity=".96"/>
+              <path d="M151 306 H269 V335 H151Z" fill="#101c22"/><path d="M153 335 H267 L256 366 H164Z" fill="url(#hero-darkmetal)" stroke="#8097a0" stroke-opacity=".36"/>
+              <path d="M169 322 H251" stroke="#59c9ff" stroke-opacity=".72"/><path d="M185 345 H235" stroke="#a9c0c9" stroke-opacity=".5"/>
+              <circle cx="210" cy="215" r="38" fill="#08141a" stroke="#e4f3f8" stroke-width="5"/><circle cx="210" cy="215" r="30" fill="url(#hero-window)"/><circle cx="210" cy="215" r="35" fill="none" stroke="#59c9ff" stroke-opacity=".42" stroke-width="2" filter="url(#hero-soft-glow)"/>
+              <path d="M187 207 Q210 184 233 207" fill="none" stroke="#e5fbff" stroke-width="3.4" stroke-linecap="round" opacity=".86"/>
+              <path d="M174 268 H246" stroke="#6f858e" stroke-opacity=".52"/><path d="M177 278 H243" stroke="#f4fbff" stroke-opacity=".42"/>
+              <path d="M188 119 L210 87 L232 119" fill="none" stroke="#fff" stroke-opacity=".7" stroke-width="2"/>
+              <path d="M181 291 H239" stroke="#59c9ff" stroke-width="1.2" stroke-opacity=".72"/>
+            </g>
+          </svg>
+          <div class="telemetry-card telemetry" aria-hidden="true"><span>VELOCITY</span> 07.82 KM/S<br><span>ALTITUDE</span> 148,000 M<br><span>THRUST</span> NOMINAL</div>
+        </div>
+      </div>
+      <div class="scroll-cue" aria-hidden="true">Scroll to continue</div>
+    </section>
+    <section class="shell" aria-labelledby="flight-title">
+      <div class="section-head" data-reveal><div><p class="eyebrow">Flight system / 01</p><h2 id="flight-title">Clear runway. <span class="section-mark">Full control.</span></h2></div><p class="telemetry">LOCAL-FIRST / OPERATOR-READY</p></div>
+      <div class="value-grid">
+        <article class="value" data-reveal><span class="value-no telemetry">01 / no terminal</span><h3>Stay in the cockpit.</h3><p>Talk through the build in a focused native workspace. The command line stays out of the way.</p></article>
+        <article class="value" data-reveal><span class="value-no telemetry">02 / full telemetry</span><h3>Watch every change.</h3><p>See the agent’s work as it happens—files, edits, and progress—without losing the thread.</p></article>
+        <article class="value" data-reveal><span class="value-no telemetry">03 / your payload</span><h3>Your folder. Your files.</h3><p>Launch from the codebase you already own. Nothing gets abstracted away from your control.</p></article>
       </div>
     </section>
-
-    <section class="values" aria-label="Why Grok Build Desktop">
-      <div class="shell value-grid">
-        <article class="value">
-          <h2>No terminal</h2>
-          <p>Choose a folder and ask in plain English. No npm install or API key setup.</p>
-        </article>
-        <article class="value">
-          <h2>Watch every change</h2>
-          <p>See which files the agent reads and edits while it works.</p>
-        </article>
-        <article class="value">
-          <h2>Your folder, your files</h2>
-          <p>Work directly in a project you choose, from a native desktop app.</p>
-        </article>
-      </div>
-    </section>
+    <section class="download-section" id="platforms" aria-labelledby="download-title"><svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="i-apple" viewBox="0 0 24 24"><path d="M17.05 12.04c-.03-2.6 2.12-3.85 2.22-3.91-1.21-1.77-3.09-2.01-3.76-2.04-1.6-.16-3.12.94-3.93.94-.81 0-1.72-.92-2.83-.9-1.46.02-2.8.85-3.55 2.16-1.51 2.62-.39 6.5 1.09 8.63.72 1.04 1.58 2.21 2.71 2.17 1.09-.04 1.5-.7 2.82-.7 1.31 0 1.69.7 2.84.68 1.17-.02 1.91-1.06 2.63-2.11.83-1.21 1.17-2.38 1.19-2.44-.03-.01-2.28-.88-2.31-3.49zM14.9 4.94c.6-.73 1.01-1.75.9-2.76-.87.04-1.92.58-2.54 1.31-.55.65-1.04 1.68-.91 2.67.97.08 1.96-.49 2.55-1.22z"/></symbol><symbol id="i-win" viewBox="0 0 24 24"><path d="M3 5.4 10.3 4.3v7.2H3zM11.6 4.1 21 2.7v8.8h-9.4zM3 12.5h7.3v7.2L3 18.6zM11.6 12.5H21v8.8l-9.4-1.4z"/></symbol><symbol id="i-linux" viewBox="0 0 24 24"><path d="M12 2.2c-1.7 0-3 1.4-3 3.1 0 .6.1 1 .3 1.5-1 .8-1.6 2.3-1.6 4.6 0 2.4-.8 3.6-1.6 4.6-.5.7-1 1.3-1 2.2 0 .6.4 1 1 1.2-.1.3-.1.5-.1.8 0 .7.6 1.1 1.4 1.2.6.9 1.7 1.5 3.2 1.5s2.6-.6 3.2-1.5c.8-.1 1.4-.5 1.4-1.2 0-.3 0-.5-.1-.8.6-.2 1-.6 1-1.2 0-.9-.5-1.5-1-2.2-.8-1-1.6-2.2-1.6-4.6 0-2.3-.6-3.8-1.6-4.6.2-.5.3-.9.3-1.5 0-1.7-1.3-3.1-3-3.1z"/><circle cx="10.6" cy="5.6" r=".75" fill="#0a1015"/><circle cx="13.4" cy="5.6" r=".75" fill="#0a1015"/><path d="M11.1 6.4h1.8l-.9 1.5z" fill="#f2b23e"/><path d="M9.5 20.3l1.5-1.7.7 2zM14.5 20.3l-1.5-1.7-.7 2z" fill="#f2b23e"/></symbol><symbol id="i-github" viewBox="0 0 24 24"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58l-.01-2.24c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.5.99.11-.78.42-1.31.76-1.61-2.67-.3-5.47-1.34-5.47-5.95 0-1.31.47-2.39 1.24-3.23-.12-.31-.54-1.53.12-3.19 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.19.77.84 1.24 1.92 1.24 3.23 0 4.62-2.81 5.65-5.49 5.95.43.37.81 1.1.81 2.22l-.01 3.29c0 .32.21.7.82.58C20.57 22.29 24 17.8 24 12.5 24 5.87 18.63.5 12 .5z"/></symbol></defs></svg><div class="shell"><div class="download-head" data-reveal><div><p class="eyebrow">Deployment / 02</p><h2 id="download-title">Choose your launch platform.</h2></div><p class="note">Free &amp; open-source. No account or GitHub login needed to download. macOS builds are signed &amp; notarized; Windows may show a SmartScreen warning on first open.</p></div><div class="platform-grid" data-reveal><a class="platform-card" href="https://github.com/Rushour0/grok-build-desktop/releases/latest" data-dl="mac-arm"><div class="pc-top"><svg class="pc-i"><use href="#i-apple"/></svg><span class="pc-arrow" aria-hidden="true">↓</span></div><span class="platform-label pc-os">macOS</span><p class="pc-title">Apple Silicon</p><p class="pc-file">.dmg · arm64</p></a><a class="platform-card" href="https://github.com/Rushour0/grok-build-desktop/releases/latest" data-dl="mac-intel"><div class="pc-top"><svg class="pc-i"><use href="#i-apple"/></svg><span class="pc-arrow" aria-hidden="true">↓</span></div><span class="platform-label pc-os">macOS</span><p class="pc-title">Intel</p><p class="pc-file">.dmg · x64</p></a><a class="platform-card" href="https://github.com/Rushour0/grok-build-desktop/releases/latest" data-dl="windows"><div class="pc-top"><svg class="pc-i"><use href="#i-win"/></svg><span class="pc-arrow" aria-hidden="true">↓</span></div><span class="platform-label pc-os">Windows</span><p class="pc-title">Installer</p><p class="pc-file">.exe · x64</p></a><a class="platform-card" href="https://github.com/Rushour0/grok-build-desktop/releases/latest" data-dl="windows-msi"><div class="pc-top"><svg class="pc-i"><use href="#i-win"/></svg><span class="pc-arrow" aria-hidden="true">↓</span></div><span class="platform-label pc-os">Windows</span><p class="pc-title">MSI Package</p><p class="pc-file">.msi · x64</p></a><a class="platform-card" href="https://github.com/Rushour0/grok-build-desktop/releases/latest" data-dl="linux-appimage"><div class="pc-top"><svg class="pc-i"><use href="#i-linux"/></svg><span class="pc-arrow" aria-hidden="true">↓</span></div><span class="platform-label pc-os">Linux</span><p class="pc-title">AppImage</p><p class="pc-file">.AppImage · x64</p></a><a class="platform-card" href="https://github.com/Rushour0/grok-build-desktop/releases/latest" data-dl="linux-deb"><div class="pc-top"><svg class="pc-i"><use href="#i-linux"/></svg><span class="pc-arrow" aria-hidden="true">↓</span></div><span class="platform-label pc-os">Linux</span><p class="pc-title">Debian · Ubuntu</p><p class="pc-file">.deb · amd64</p></a><a class="platform-card" href="https://github.com/Rushour0/grok-build-desktop/releases/latest" data-dl="linux-rpm"><div class="pc-top"><svg class="pc-i"><use href="#i-linux"/></svg><span class="pc-arrow" aria-hidden="true">↓</span></div><span class="platform-label pc-os">Linux</span><p class="pc-title">Fedora · RHEL</p><p class="pc-file">.rpm · x86_64</p></a></div><div class="release-row"><a class="release-link" href="https://github.com/Rushour0/grok-build-desktop/releases"><svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>View all releases</a></div></div></section>
   </main>
-
-  <footer class="shell footer">
-    <p>Independent open-source project. Not affiliated with xAI.</p>
-    <div class="footer-links">
-      <a href="https://github.com/Rushour0/grok-build-desktop">Repository</a>
-      <span>Apache-2.0</span>
-    </div>
-  </footer>
+  <footer><div class="shell footer-inner"><span>Independent open-source project. Not affiliated with xAI.</span><nav class="footer-links" aria-label="Project links"><a href="https://github.com/Rushour0/grok-build-desktop"><svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>Repository</a><a href="https://github.com/xai-org/grok-build"><svg class="ico" aria-hidden="true"><use href="#i-github"/></svg>xai-org/grok-build</a><span>Apache-2.0</span></nav></div></footer>
+  <script>
+    (() => {
+      const REPO = 'Rushour0/grok-build-desktop';
+      const releases = 'https://github.com/' + REPO + '/releases/latest';
+      const API = 'https://api.github.com/repos/' + REPO + '/releases/latest';
+      const PATTERNS = { 'mac-arm':/aarch64\.dmg$/i, 'mac-intel':/x64\.dmg$/i, 'windows':/x64-setup\.exe$/i, 'windows-msi':/x64_en-US\.msi$/i, 'linux-appimage':/amd64\.AppImage$/i, 'linux-deb':/amd64\.deb$/i, 'linux-rpm':/x86_64\.rpm$/i };
+      const primary = document.getElementById('primary-download');
+      const label = document.getElementById('download-label');
+      const variant = document.getElementById('download-variant');
+      const status = document.getElementById('version-status');
+      const osIcoUse = document.querySelector('#dl-os-ico use');
+      const icoFor = k => k==='windows' ? '#i-win' : (k&&k.slice(0,5)==='linux') ? '#i-linux' : (k&&k.slice(0,3)==='mac') ? '#i-apple' : '#i-github';
+      const ua = navigator.userAgent || '';
+      let key, os, detail;
+      if (/Windows/i.test(ua)) { key='windows'; os='Windows'; detail='.exe installer'; }
+      else if (/Linux/i.test(ua) && !/Android/i.test(ua)) { key='linux-appimage'; os='Linux'; detail='.AppImage'; }
+      else if (/Macintosh|Mac OS X/i.test(ua) && !/iPhone|iPad|iPod/i.test(ua)) { key='mac-arm'; os='macOS'; detail='Apple Silicon'; }
+      if (key) { label.textContent='Download for '+os; variant.textContent=detail; }
+      else { label.textContent='Download'; variant.textContent='Choose a platform'; }
+      if (osIcoUse) osIcoUse.setAttribute('href', icoFor(key));
+      if (key === 'mac-arm' && navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+        navigator.userAgentData.getHighEntropyValues(['architecture']).then(data => { if (/x86|intel/i.test(data.architecture || '')) { key='mac-intel'; variant.textContent='Intel'; if (window.__setPrimary) window.__setPrimary(); } }).catch(() => {});
+      }
+      // Resolve real download URLs client-side from the GitHub API — no server needed (works on static hosting).
+      fetch(API, { headers: { 'Accept':'application/vnd.github+json' } })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(rel => {
+          const assets = rel.assets || [];
+          const urlFor = k => { const p = PATTERNS[k]; const a = p && assets.find(a => p.test(a.name)); return a ? a.browser_download_url : releases; };
+          window.__setPrimary = () => { if (key) primary.href = urlFor(key); };
+          document.querySelectorAll('[data-dl]').forEach(el => { el.href = urlFor(el.getAttribute('data-dl')); });
+          window.__setPrimary();
+          status.textContent = 'GROK BUILD DESKTOP · ' + (rel.tag_name || 'READY') + ' · READY';
+        })
+        .catch(() => { status.textContent = 'GROK BUILD DESKTOP · READY FOR LAUNCH'; });
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const reveal = document.querySelectorAll('[data-reveal]');
+      if (reduced || !('IntersectionObserver' in window)) reveal.forEach(el => el.classList.add('is-visible'));
+      else { const observer = new IntersectionObserver(entries => entries.forEach(e => { if(e.isIntersecting) { e.target.classList.add('is-visible'); observer.unobserve(e.target); } }), {threshold:.12}); reveal.forEach(el => observer.observe(el)); }
+      if (reduced) return;
+      const canvas = document.querySelector('.stars'), ctx = canvas.getContext('2d'); let stars=[]; let w,h,dpr;
+      function resize(){ dpr=Math.min(window.devicePixelRatio||1,2); w=innerWidth; h=innerHeight; canvas.width=w*dpr; canvas.height=h*dpr; canvas.style.width=w+'px'; canvas.style.height=h+'px'; ctx.setTransform(dpr,0,0,dpr,0,0); stars=Array.from({length:Math.min(150,Math.floor(w*h/8500))},()=>({x:Math.random()*w,y:Math.random()*h,z:.25+Math.random()*.9,r:Math.random()*1.15+.2})); }
+      function draw(){ ctx.clearRect(0,0,w,h); ctx.fillStyle='#d5edf7'; for(const s of stars){ s.y+=s.z*.11; s.x-=s.z*.018; if(s.y>h+2)s.y=-2; if(s.x<0)s.x=w; ctx.globalAlpha=.18+s.z*.55; ctx.fillRect(s.x,s.y,s.r,s.r); } ctx.globalAlpha=1; requestAnimationFrame(draw); }
+      addEventListener('resize',resize,{passive:true}); resize(); draw();
+    })();
+  </script>
 </body>
 </html>
