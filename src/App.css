@@ -1746,3 +1746,357 @@ textarea:focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
+
+/* ---- tool card: the collapsible "what did grok actually do" surface. Same monochrome
+   panel/line/shadow language as .ask and .plan above; the only colour is the semantic
+   completed/failed tick, matching .tool's tick so the vocabulary stays consistent. ---- */
+
+.tool-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  max-width: min(100%, 72ch);
+  width: 100%;
+  background: var(--sheen), var(--panel);
+  box-shadow: var(--shadow-1);
+  transition: border-color var(--dur) var(--ease-standard);
+}
+.tool-card.completed {
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--line));
+}
+.tool-card.failed {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+}
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.65rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.tool-card-head:hover {
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+/* A generic dot by default; specific kinds (read/write/exec/search/…) get a shape via
+   `data-kind` so the icon still reads without pulling in an icon font or SVG sprite. */
+.tool-card-icon {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+}
+.tool-card-icon[data-kind="edit"],
+.tool-card-icon[data-kind="write"] {
+  border-radius: 2px;
+}
+.tool-card-icon[data-kind="search"],
+.tool-card-icon[data-kind="read"] {
+  border-radius: 50%;
+  background: transparent;
+  border: 1.5px solid var(--ink-soft);
+}
+.tool-card-icon[data-kind="exec"],
+.tool-card-icon[data-kind="command"] {
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+.tool-card-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-card-ro {
+  flex: none;
+  padding: 0.08rem 0.4rem;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.tool-card-status {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+  transition: background var(--dur) var(--ease-standard);
+}
+.tool-card.in_progress .tool-card-status,
+.tool-card.pending .tool-card-status {
+  animation: pulse 1.1s ease-in-out infinite;
+}
+.tool-card.completed .tool-card-status {
+  background: var(--ok);
+  animation: pop var(--dur) var(--ease-out);
+}
+.tool-card.failed .tool-card-status {
+  background: var(--danger);
+  animation: pop var(--dur) var(--ease-out);
+}
+.tool-card-dur {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.tool-card-chevron {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--ink-soft);
+  border-bottom: 1.5px solid var(--ink-soft);
+  transform: rotate(-45deg);
+  margin-right: 1px;
+  transition: transform var(--dur) var(--ease-out);
+}
+.tool-card.expanded .tool-card-chevron {
+  transform: rotate(45deg);
+  margin-right: 0;
+  margin-top: -2px;
+}
+.tool-card-body {
+  border-top: 1px solid var(--line);
+  padding: 0.5rem 0.65rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  animation: fade-up var(--dur-fast) var(--ease-out) both;
+}
+.tool-card-section-label {
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  margin-bottom: 0.2rem;
+}
+/* Long tool input/output is common (file contents, command output) — cap the height and
+   let it scroll internally rather than pushing the whole transcript around. */
+.tool-card-pre {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  max-height: 260px;
+}
+.tool-card-locs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.tool-loc {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+/* ---- code block chrome: the fenced-code frame around highlight.js output ---- */
+
+.code-block {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+  margin: 0.4rem 0;
+}
+.code-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.code-lang {
+  font-size: 0.68rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+.code-copy,
+.code-wrap-toggle {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+  border-radius: 6px;
+}
+.code-copy:hover,
+.code-wrap-toggle:hover {
+  color: var(--ink);
+  background: var(--bg);
+}
+.code-block pre {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  overflow: auto;
+  max-height: 420px;
+}
+.code-block pre code.hljs {
+  padding: 0;
+  background: transparent;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre;
+}
+/* Wrap mode, toggled by the "Wrap"/"No wrap" button — same idiom as .split-diff.nowrap. */
+.code-block.wrap pre code.hljs {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* ---- highlight.js class map: restrained, muted, monochrome-first. A couple of hues carry
+   the weight (a warm hue for literals/strings, a cool hue for keywords/tags) and everything
+   else stays ink/ink-soft so code reads calm inside the chat stream rather than like a
+   separate syntax-highlighted app bolted on. Light values first; dark overrides below. ---- */
+
+.hljs {
+  color: var(--ink);
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-subst {
+  color: #6f42c1;
+}
+.hljs-string,
+.hljs-addition,
+.hljs-regexp {
+  color: #067647;
+}
+.hljs-number,
+.hljs-symbol {
+  color: #b35900;
+}
+.hljs-title,
+.hljs-function,
+.hljs-title.function_ {
+  color: #0550ae;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable,
+.hljs-template-variable {
+  color: #b35900;
+}
+.hljs-built_in,
+.hljs-type,
+.hljs-class .hljs-title {
+  color: #0550ae;
+}
+.hljs-meta {
+  color: var(--ink-soft);
+}
+.hljs-tag,
+.hljs-name {
+  color: #0550ae;
+}
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-selector-attr,
+.hljs-selector-pseudo {
+  color: #6f42c1;
+}
+.hljs-operator,
+.hljs-punctuation {
+  color: var(--ink-soft);
+}
+.hljs-deletion {
+  color: #b42318;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-literal,
+  .hljs-subst {
+    color: #c297ff;
+  }
+  .hljs-string,
+  .hljs-addition,
+  .hljs-regexp {
+    color: #4ade80;
+  }
+  .hljs-number,
+  .hljs-symbol {
+    color: #e0a460;
+  }
+  .hljs-title,
+  .hljs-function,
+  .hljs-title.function_ {
+    color: #79b8ff;
+  }
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-variable,
+  .hljs-template-variable {
+    color: #e0a460;
+  }
+  .hljs-built_in,
+  .hljs-type,
+  .hljs-class .hljs-title {
+    color: #79b8ff;
+  }
+  .hljs-tag,
+  .hljs-name {
+    color: #79b8ff;
+  }
+  .hljs-selector-id,
+  .hljs-selector-class,
+  .hljs-selector-attr,
+  .hljs-selector-pseudo {
+    color: #c297ff;
+  }
+  .hljs-deletion {
+    color: #ff6b6b;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-card-body,
+  .tool-card-status,
+  .tool-card.completed .tool-card-status,
+  .tool-card.failed .tool-card-status,
+  .tool-card-chevron {
+    animation: none;
+    transition: none;
+  }
+}

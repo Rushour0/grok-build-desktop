@@ -1,7 +1,7 @@
 {
   "name": "grok-build-desktop",
   "private": true,
-  "version": "0.8.10",
+  "version": "0.9.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,6 +18,7 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "diff": "^7.0.0",
+    "highlight.js": "^11.10.0",
     "markdown-to-jsx": "^9.8.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

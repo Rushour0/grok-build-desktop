@@ -44,6 +44,21 @@ const toolUpdate = (over: Partial<SessionUpdate> = {}): SessionUpdate => ({
   toolCallId: "t1",
   ...over,
 });
+// A tool_call carrying grok's own `_meta["x.ai/tool"]` block — the richer,
+// non-ACP metadata lib/toolMeta.ts's parseToolMeta() picks up (label, readOnly,
+// kind, namespace) on top of the plain ACP title/kind fields every tool has.
+const toolCallWithXaiMeta = (over: Partial<SessionUpdate> = {}): SessionUpdate =>
+  toolCall({
+    _meta: {
+      "x.ai/tool": {
+        kind: "read_file",
+        namespace: "fs",
+        label: "Reading App.tsx",
+        readOnly: true,
+      },
+    },
+    ...over,
+  });
 
 const texts = (items: Item[]) => items.filter(isText).map((i) => i.text);
 const kinds = (items: Item[]) => items.map((i) => i.kind);
@@ -223,8 +238,11 @@ describe("reduceUpdates: user messages", () => {
 
 describe("reduceUpdates: tool calls", () => {
   it("renders a tool call with its id, title and status", () => {
+    // toMatchObject, not toEqual: ToolFields (lib/toolMeta.ts) also carries
+    // meta/content/locations/rawInput/rawOutput now. This test's job is only to
+    // pin id/kind/title/status — the x.ai/tool _meta cases below pin the rest.
     const items = reduceUpdates([toolCall({ status: "in_progress" })]);
-    expect(items[0]).toEqual({
+    expect(items[0]).toMatchObject({
       id: "t1",
       kind: "tool",
       title: "Reading src/App.tsx",
@@ -309,6 +327,61 @@ describe("reduceUpdates: tool_call_update mutates in place", () => {
   it("does not mistake a text bubble for the tool it names", () => {
     const items = reduceUpdates([answer("a"), toolUpdate({ toolCallId: "ans-0", status: "failed" })]);
     expect(items[0]).toMatchObject({ kind: "answer", text: "a" });
+  });
+});
+
+describe("reduceUpdates: x.ai/tool _meta flows through to the ToolItem", () => {
+  // grok's ACP stream carries a richer, non-standard `_meta["x.ai/tool"]` block
+  // alongside the plain ACP title/kind fields. reduceUpdates must not just read
+  // title/status — it has to go through toolFieldsFromCall/mergeToolUpdate
+  // (lib/toolMeta.ts) so that block's label/readOnly survive into the item the
+  // card renders, and survive a later tool_call_update that completes the call.
+
+  it("carries meta.source, meta.label and meta.readOnly off the initial tool_call", () => {
+    const items = reduceUpdates([toolCallWithXaiMeta({ status: "in_progress" })]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: "t1",
+      kind: "tool",
+      status: "in_progress",
+      meta: { source: "x.ai/tool", label: "Reading App.tsx", readOnly: true },
+    });
+  });
+
+  it("keeps meta.readOnly and meta.label, and merges status/content, once a tool_call_update completes it", () => {
+    const items = reduceUpdates([
+      toolCallWithXaiMeta({ status: "in_progress" }),
+      // The wire's tool_call_update `content` is an ARRAY of ToolCallContent,
+      // not the single ContentBlock bridge.ts types SessionUpdate.content as for
+      // message chunks — toolMeta.ts casts through that mismatch on purpose
+      // (see bridge.ts's ToolCallContent doc comment), so this fixture must too.
+      toolUpdate({
+        status: "completed",
+        content: [{ type: "text", text: "export function App() {}" }],
+      } as unknown as Partial<SessionUpdate>),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: "t1",
+      kind: "tool",
+      status: "completed",
+      meta: { source: "x.ai/tool", label: "Reading App.tsx", readOnly: true },
+      content: [{ type: "text", text: "export function App() {}" }],
+    });
+  });
+
+  it("does not let a plain-ACP tool_call_update erase the readOnly/label the tool_call established", () => {
+    // The update below revises only the title — mergeToolUpdate must not
+    // overwrite meta with something that has lost readOnly/label just because
+    // this particular update carries no x.ai/tool block of its own.
+    const items = reduceUpdates([
+      toolCallWithXaiMeta({ status: "in_progress" }),
+      toolUpdate({ title: "Read 40 lines" }),
+    ]);
+    expect(items[0]).toMatchObject({
+      title: "Read 40 lines",
+      meta: { readOnly: true, label: "Reading App.tsx" },
+    });
   });
 });
 
@@ -402,11 +475,13 @@ describe("reduceUpdates: a whole replayed conversation", () => {
   });
 
   it("carries the tool_call_update through to the finished tool", () => {
+    // toMatchObject for the same reason as above: the tool items also carry
+    // meta/content/locations now, which this test isn't about.
     const items = reduceUpdates(stream);
-    expect(items.filter(isTool)).toEqual([
-      { id: "t1", kind: "tool", title: "Listing files", status: "completed" },
-      { id: "t2", kind: "tool", title: "Writing README.md", status: "completed" },
-    ]);
+    const tools = items.filter(isTool);
+    expect(tools).toHaveLength(2);
+    expect(tools[0]).toMatchObject({ id: "t1", kind: "tool", title: "Listing files", status: "completed" });
+    expect(tools[1]).toMatchObject({ id: "t2", kind: "tool", title: "Writing README.md", status: "completed" });
   });
 
   it("is a pure function of its input", () => {

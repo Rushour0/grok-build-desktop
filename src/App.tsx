@@ -34,6 +34,9 @@ import {
   type SessionMeta,
   type SessionUpdate,
 } from "./lib/bridge";
+import { toolFieldsFromCall, mergeToolUpdate, type ToolFields } from "./lib/toolMeta";
+import { ToolCard } from "./ToolCard";
+import { CodeBlock } from "./CodeBlock";
 import "./App.css";
 
 // Installation is global. A *window* owns one project folder (Rust decides which,
@@ -45,11 +48,16 @@ import "./App.css";
 // render actually branches on, so a stage that drifts can't make the UI lie.
 export type Stage = "checking" | "needs-install" | "installing" | "ready" | "chat";
 
-export interface ToolItem {
+/// A tool call in the transcript. `ToolFields` (see lib/toolMeta.ts) carries everything
+/// that can be known about the call itself — title, status, meta, raw input/output,
+/// content, locations — parsed the same way whether it arrives via replay or live.
+/// `startedAt`/`endedAt` are ours alone: they're wall-clock stamps for the duration shown
+/// on the card, and replay has no "live" moment to stamp, so only the live path sets them.
+export interface ToolItem extends ToolFields {
   id: string;
   kind: "tool";
-  title: string;
-  status: string;
+  startedAt?: number;
+  endedAt?: number;
 }
 export interface TextItem {
   id: string;
@@ -247,6 +255,9 @@ export function reduceUpdates(updates: SessionUpdate[]): Item[] {
               { id: `you-${index}`, kind: "you", text: update.content?.text ?? "" },
             ],
           };
+        // Replay has no "live" moment, so these two go through the same pure
+        // toolMeta.ts helpers the live path uses (below) but stamp no timestamps —
+        // a card replayed from history never shows a duration it didn't earn.
         case "tool_call":
           return {
             items: [
@@ -254,8 +265,7 @@ export function reduceUpdates(updates: SessionUpdate[]): Item[] {
               {
                 id: update.toolCallId ?? `tool-${index}`,
                 kind: "tool",
-                title: update.title ?? update.kind ?? "Working",
-                status: update.status ?? "completed",
+                ...toolFieldsFromCall(update),
               },
             ],
           };
@@ -264,11 +274,7 @@ export function reduceUpdates(updates: SessionUpdate[]): Item[] {
             ...state,
             items: state.items.map((item) =>
               isTool(item) && item.id === update.toolCallId
-                ? {
-                    ...item,
-                    status: update.status ?? item.status,
-                    title: update.title ?? item.title,
-                  }
+                ? { ...item, ...mergeToolUpdate(item, update) }
                 : item,
             ),
           };
@@ -845,7 +851,10 @@ export default function App() {
             ...tab,
             items: [
               ...tab.items,
-              { id, kind: "tool", title: u.title ?? u.kind ?? "Working", status: u.status ?? "in_progress" },
+              // Live-only: stamp the moment the call started so the card can show a
+              // duration once it finishes. Everything else comes from toolMeta.ts so
+              // this can't drift from what reduceUpdates builds on replay.
+              { id, kind: "tool", startedAt: Date.now(), ...toolFieldsFromCall(u) },
             ],
           }));
           // A tool ran, so any answer text after it belongs in a fresh bubble.
@@ -855,11 +864,15 @@ export default function App() {
         case "tool_call_update": {
           updateTab(tabId, (tab) => ({
             ...tab,
-            items: tab.items.map((i) =>
-              isTool(i) && i.id === u.toolCallId
-                ? { ...i, status: u.status ?? i.status, title: u.title ?? i.title }
-                : i,
-            ),
+            items: tab.items.map((i) => {
+              if (!isTool(i) || i.id !== u.toolCallId) return i;
+              const merged = { ...i, ...mergeToolUpdate(i, u) };
+              // Stamp completion the instant status crosses into a terminal state —
+              // not on every update to that state, or a resend would push the clock.
+              const justEnded =
+                (merged.status === "completed" || merged.status === "failed") && !i.endedAt;
+              return justEnded ? { ...merged, endedAt: Date.now() } : merged;
+            }),
           }));
           break;
         }
@@ -1900,12 +1913,35 @@ function MarkdownImage({ alt, src }: { alt?: string; src?: string }) {
   return <span className="md-dead-link">{label ? `image: ${label}` : "image"}{src ? "" : ""}</span>;
 }
 
+/// Fenced code blocks compile to `<pre><code class="lang-xxx">…</code></pre>`; this
+/// overrides the outer `pre` only, so inline `` `code` `` (no fence, no `pre` wrapper)
+/// keeps markdown-to-jsx's plain default rendering untouched. The code text and
+/// language both live on the child `<code>` element that markdown-to-jsx already
+/// built — we're pulling them back out, not re-parsing the markdown ourselves.
+function MarkdownPre({ children }: { children?: React.ReactNode }) {
+  const codeEl = Array.isArray(children) ? children[0] : children;
+  if (
+    !codeEl ||
+    typeof codeEl !== "object" ||
+    !("props" in codeEl) ||
+    typeof (codeEl as { props?: { children?: unknown; className?: unknown } }).props !== "object"
+  ) {
+    // Not the shape we expect (defensive only — markdown-to-jsx always nests a
+    // `code` here for a fenced block): fall back to a plain, safe `pre`.
+    return <pre>{children}</pre>;
+  }
+  const props = (codeEl as { props: { children?: unknown; className?: string } }).props;
+  const code = Array.isArray(props.children) ? props.children.join("") : String(props.children ?? "");
+  const match = /(?:^|\s)lang-(\S+)/.exec(props.className ?? "");
+  return <CodeBlock code={code} lang={match?.[1]} />;
+}
+
 const MARKDOWN_OPTIONS = {
   disableParsingRawHTML: true,
   // Without this a one-line answer compiles to a bare inline span, so the same
   // message would be spaced differently depending on its length.
   forceBlock: true,
-  overrides: { a: MarkdownLink, table: MarkdownTable, img: MarkdownImage },
+  overrides: { a: MarkdownLink, table: MarkdownTable, img: MarkdownImage, pre: MarkdownPre },
 } as const;
 
 /// Memoized on `text` alone, which is what keeps streaming from going quadratic.
@@ -1938,12 +1974,7 @@ function TranscriptItems({
 }) {
   return items.map((item) => {
     if (isTool(item)) {
-      return (
-        <div key={item.id} className={`tool ${item.status}`}>
-          <span className="tick" />
-          {item.title}
-        </div>
-      );
+      return <ToolCard key={item.id} item={item} />;
     }
     if (isAsk(item)) return <PermissionCard key={item.id} item={item} onDecide={onDecide} />;
     if (isPlan(item)) return <PlanCard key={item.id} entries={item.entries} />;

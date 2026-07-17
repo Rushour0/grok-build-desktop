@@ -143,6 +143,19 @@ export interface ContentBlock {
   text?: string;
 }
 
+/// One entry of a tool call's `content` array — richer than a message-chunk
+/// `ContentBlock` (diffs, nested content wrappers). `toolMeta.ts` reads the
+/// wire `content` field through a cast helper for `tool_call`/`tool_call_update`
+/// updates, since `SessionUpdate.content` below stays typed for message chunks.
+export interface ToolCallContent {
+  type: string; // "text" | "diff" | "content" | ...
+  text?: string;
+  path?: string;
+  oldText?: string;
+  newText?: string;
+  content?: ContentBlock; // ACP nested content wrapper
+}
+
 export interface SessionUpdate {
   sessionUpdate: SessionUpdateKind;
   content?: ContentBlock;
@@ -151,6 +164,13 @@ export interface SessionUpdate {
   title?: string;
   kind?: string;
   status?: "pending" | "in_progress" | "completed" | "failed";
+  // Present on the wire for tool_call/tool_call_update but previously untyped.
+  // toolContentOf() in toolMeta.ts is what actually reads these off a tool
+  // update — the `content` field above stays ContentBlock for message chunks.
+  rawInput?: unknown;
+  rawOutput?: unknown;
+  locations?: { path: string; line?: number }[];
+  _meta?: Record<string, unknown>;
   // plan
   entries?: { content: string; status?: string; priority?: string }[];
 }
