@@ -1358,6 +1358,105 @@ button.tab-close:hover {
   font-size: 0.9rem;
 }
 
+/* ---- bubble-wrap / msg-actions (v0.9.4) ----
+   The wrapper is a transparent shell around .bubble.answer / .bubble.you — it exists only
+   to anchor the action row and to give hover/focus a bigger, forgiving target than the
+   buttons themselves. It carries no visual identity of its own: no background, no border,
+   nothing that would double the bubble it holds. `:has()` lets it inherit the same
+   left/right alignment the direct-child selectors below already give `.bubble.you`, so
+   wrapping a bubble changes nothing about where it sits. */
+.bubble-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-width: 72ch;
+}
+.bubble-wrap:has(.bubble.you) {
+  align-self: flex-end;
+}
+.bubble-wrap:has(.bubble.answer) {
+  align-self: flex-start;
+}
+.bubble-wrap > .bubble {
+  max-width: 100%;
+}
+/* Keep the stream's entrance/lift motion working when a bubble is wrapped: the wrapper,
+   not the bubble, is now the direct child of `.stream`. */
+.stream > .bubble-wrap {
+  animation: rise var(--dur) var(--ease-out);
+}
+.stream > .bubble-wrap:has(.bubble.answer) {
+  transition: transform var(--dur) var(--ease-out);
+}
+.stream > .bubble-wrap:has(.bubble.answer):hover {
+  transform: translateY(-3px) rotateX(2deg);
+}
+
+/* Hidden until the pointer or keyboard focus lands on the bubble it belongs to — a
+   transcript full of visible chrome would fight the text for attention. Opacity + a
+   pointer-events toggle only, so nothing reflows and reduced-motion users still get a
+   correct (if instant) show/hide. Positioned to hover just above the bubble's near-top
+   corner so it never sits over the text itself, even on narrow columns. */
+.msg-actions {
+  position: absolute;
+  top: -0.7rem;
+  right: 0.4rem;
+  display: flex;
+  gap: 0.3rem;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(2px);
+  transition: opacity var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-out);
+  z-index: 1;
+}
+.bubble-wrap:has(.bubble.you) .msg-actions {
+  right: auto;
+  left: 0.4rem;
+}
+.bubble-wrap:hover > .msg-actions,
+.bubble-wrap:focus-within > .msg-actions,
+.msg-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+/* Small monochrome ghost buttons — same family as the rest of the chrome (`--panel`,
+   `--line`, `--ink-soft`), never a new hue. `.copied` is the one moment `--ok` is allowed
+   in, and even then only as a border/text tint, not a fill, so it reads as confirmation
+   rather than a status light. */
+.msg-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.22rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  line-height: 1.2;
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+}
+.msg-action:hover,
+.msg-action:focus-visible {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--ink) 25%, var(--line));
+}
+.msg-action:focus-visible {
+  outline: 2px solid var(--ink-soft);
+  outline-offset: 1px;
+}
+.msg-action.copied {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--line));
+}
+
 /* ---- rendered markdown (agent output only: .answer and .thought) ----
    No new colour enters here. `--accent` is monochrome on purpose, so structure is
    carried by weight, rule lines (`--line`) and the muted ink (`--ink-soft`) the
@@ -1617,6 +1716,7 @@ button.tab-close:hover {
   button.recent,
   button.side-row,
   .stream > .bubble,
+  .stream > .bubble-wrap,
   .stream > .tool,
   .stream > .plan,
   .stream > .ask,
@@ -1634,12 +1734,23 @@ button.tab-close:hover {
     animation: none;
     opacity: 1;
   }
+  /* Reveal stays opacity-only — no rise, no slide. */
+  .msg-actions {
+    transition: opacity var(--dur-fast) var(--ease-standard);
+    transform: none;
+  }
+  .bubble-wrap:hover > .msg-actions,
+  .bubble-wrap:focus-within > .msg-actions,
+  .msg-actions:focus-within {
+    transform: none;
+  }
   /* The depth stays, but the hover motion that expresses it doesn't move: no card tilt, no
      lift. The surfaces keep their shadows; nothing travels. */
   .stream {
     perspective: none;
   }
   .stream > .bubble.answer:hover,
+  .stream > .bubble-wrap:has(.bubble.answer):hover,
   .stream > .ask:hover,
   .stream > .plan:hover,
   button.primary:hover:not(:disabled),

@@ -5,7 +5,7 @@ Agent Client Protocol (ACP) over the child's stdio, and forwards the live sessio
 webview. Independent and unofficial: it drives the upstream CLI at runtime and does not
 redistribute it. See `NOTICE`.
 
-Current version: **0.9.3**.
+Current version: **0.9.4**.
 
 ```text
 webview (React)  --invoke-->  Rust host  --stdin-->   grok agent stdio
@@ -213,6 +213,14 @@ deleted transcript mode (`.content-header`, `.content-actions`, `.history-state`
    based on anything Grok reports about its own tools (`x.ai/tool`, `read_only`, or otherwise) —
    that metadata is display-only. Upstream drift is surfaced for a human to review, not consumed
    to change what gets approved.
+0d. **Shipped in v0.9.4 ("Experiment without fear" — safe slice):** message actions — a Copy
+   button on transcript bubbles (both agent answers and user messages) that copies the raw text
+   via the clipboard, and an Edit action on user ("you") messages that loads that message's text
+   back into the composer draft and focuses it so it can be tweaked and sent as a **new** turn.
+   This is purely additive to the composer draft: it does not delete, rewrite, or truncate any
+   transcript history. Destructive checkpoint/rewind (editing a past turn in place and re-running
+   from that point) is intentionally **deferred** pending a design decision on how conversation
+   truncation should work with ACP session state — do not conflate the two features.
 1. The one refactor above (kills four bugs).
 2. ~~Surface grok's own capabilities — it advertises `available_commands`~~ — the slash-command
    piece is done (see 0a). Remaining: exposing `/compact`, `/context`, `/session-info`, and

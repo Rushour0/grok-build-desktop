@@ -151,8 +151,13 @@ Grok, or its own metadata, any new trust.
   panel — v0.9.2
 - [x] An upstream watcher-bot that opens a PR when Grok/ACP tool schema, models, or versions
   drift, plus a read-only Tools & Safety panel in Preferences — v0.9.3
+- [x] Message actions — copy any message, and edit-and-resend a prompt as a new turn — v0.9.4
 
 Not yet, on the list:
+
+- [ ] Destructive checkpoint/rewind (edit a past turn in place and truncate/re-run from that
+  point) — intentionally deferred from v0.9.4 pending a design decision on how conversation
+  truncation should interact with ACP session state
 
 - [ ] Cost display — token counts are shown, but not converted to currency
 - [ ] Code-signed Windows builds (no SmartScreen warning)

@@ -46,6 +46,7 @@ import { CodeBlock } from "./CodeBlock";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { Autocomplete, type AcItem } from "./Autocomplete";
 import { Preferences } from "./Preferences";
+import { MessageActions } from "./MessageActions";
 import { filterSlash, filterFiles, detectTrigger, applyPick } from "./lib/commands";
 import { isThemePref, applyTheme, type ThemePref } from "./lib/theme";
 import "./App.css";
@@ -2056,6 +2057,10 @@ export default function App() {
                       items={activeTab.items}
                       streamingId={streamingId}
                       onDecide={(item, optionId, label) => decide(activeTab, item, optionId, label)}
+                      onEditMessage={(text) => {
+                        updateActiveTab((tab) => ({ ...tab, draft: text }));
+                        requestAnimationFrame(() => textareaRef.current?.focus());
+                      }}
                     />
                     {activeTab.busy && (
                       <div className="working">
@@ -2327,16 +2332,25 @@ export const MarkdownText = memo(function MarkdownText({ text }: { text: string 
 /// verbatim too — it's backend text and must not be reformatted or swallowed.
 const RENDERS_MARKDOWN: ReadonlySet<TextItem["kind"]> = new Set(["answer", "thought"]);
 
+/// Bubbles that get a hover action row (copy, and — for the user's own words — edit).
+/// Thoughts and errors are backend/model narration, not something the user authored
+/// or would want to paste back into the composer, so they stay bare.
+const HAS_ACTIONS: ReadonlySet<TextItem["kind"]> = new Set(["answer", "you"]);
+
 function TranscriptItems({
   items,
   streamingId,
   onDecide,
+  onEditMessage,
 }: {
   items: Item[];
   /// The id of the answer bubble currently streaming, or null. Only decides whether this
   /// bubble wears the live caret — a class add, never a change to its entrance animation.
   streamingId?: string | null;
   onDecide?: (i: AskItem, optionId: string | null, label: string) => void;
+  /// Loads a past "you" message's text back into the composer draft for editing and
+  /// resending as a new turn. Never mutates or truncates history.
+  onEditMessage?: (text: string) => void;
 }) {
   return items.map((item) => {
     if (isTool(item)) {
@@ -2347,9 +2361,25 @@ function TranscriptItems({
     if (isUsage(item)) return <UsageLine key={item.id} item={item} />;
     const markdown = RENDERS_MARKDOWN.has(item.kind);
     const streaming = item.id === streamingId ? " streaming" : "";
+    const bubbleClass = `bubble ${item.kind}${markdown ? " md" : ""}${streaming}`;
+    const content = markdown ? <MarkdownText text={item.text} /> : item.text;
+    // Only answer/you bubbles get the hover action row, and only once they've settled
+    // (not mid-stream) — wrapping stays scoped to those so thought/error bubbles keep
+    // rendering as the direct `.stream` child the existing CSS selectors expect.
+    if (HAS_ACTIONS.has(item.kind) && item.id !== streamingId) {
+      return (
+        <div key={item.id} className="bubble-wrap">
+          <div className={bubbleClass}>{content}</div>
+          <MessageActions
+            text={item.text}
+            onEdit={item.kind === "you" ? () => onEditMessage?.(item.text) : undefined}
+          />
+        </div>
+      );
+    }
     return (
-      <div key={item.id} className={`bubble ${item.kind}${markdown ? " md" : ""}${streaming}`}>
-        {markdown ? <MarkdownText text={item.text} /> : item.text}
+      <div key={item.id} className={bubbleClass}>
+        {content}
       </div>
     );
   });
