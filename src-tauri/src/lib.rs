@@ -368,9 +368,14 @@ struct OpenOutcome {
     label: String,
 }
 
-/// The window title for a project: just the folder's name.
+/// The window title for a project: the app, then the folder.
+///
+/// The folder alone reads fine in isolation and terribly in a dock or a window
+/// switcher, where "fabri" next to a dozen other windows says nothing about which
+/// app owns it. The launcher keeps the config's bare "Grok Build Desktop" — it has
+/// no project to name yet.
 fn window_title(cwd: &str) -> String {
-    basename(cwd)
+    format!("Grok Build Desktop — {}", basename(cwd))
 }
 
 /// Build a window under `label`, cloning the app's configured window as the template.
