@@ -2519,6 +2519,37 @@ textarea:focus-visible {
   font-size: 0.76rem;
 }
 
+/* Tools & Safety: the read-only allowlist rendered as a wrapping row of small monospace pills.
+   Same rounded-pill/border/background idiom as .attachment-chip so it reads as "chip", just
+   static (no dismiss button, no hover-lift) since these are a fixed, non-interactive list. */
+.prefs-tool-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0;
+}
+
+.prefs-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.prefs-copy {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .prefs-backdrop,
   .prefs,

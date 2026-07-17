@@ -136,6 +136,11 @@ export const listProjectFiles = (cwd: string) => invoke<string[]>("list_project_
 /// rather than returning empty on failure — see HANDOFF #3.
 export const grokVersion = () => invoke<string>("grok_version");
 
+/// The app's hardcoded default-deny allowlist of local read-only tools that run
+/// without asking first (READONLY_TOOLS in lib.rs). Transparency only — this is
+/// not a source of truth the frontend can widen; Rust's allowlist stays sole authority.
+export const readonlyTools = () => invoke<string[]>("readonly_tools");
+
 // ---- ACP session/update payloads (Rust -> webview) ----
 // Shapes verified against grok 0.2.101's `initialize` response.
 

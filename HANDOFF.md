@@ -5,7 +5,7 @@ Agent Client Protocol (ACP) over the child's stdio, and forwards the live sessio
 webview. Independent and unofficial: it drives the upstream CLI at runtime and does not
 redistribute it. See `NOTICE`.
 
-Current version: **0.9.2**.
+Current version: **0.9.3**.
 
 ```text
 webview (React)  --invoke-->  Rust host  --stdin-->   grok agent stdio
@@ -199,6 +199,20 @@ deleted transcript mode (`.content-header`, `.content-actions`, `.history-state`
    `available_commands_update`, and @-mention file autocomplete. Invocation is unchanged — the
    composer draft is still sent verbatim via `sendPrompt`; picking a slash command or file just
    inserts text into the draft.
+0b. **Shipped in v0.9.2:** Preferences overlay (Cmd/Ctrl+,), Light/Dark/System theme toggle, and
+   a model + reasoning-effort panel.
+0c. **Shipped in v0.9.3 ("Never drift again"):** an upstream watcher-bot
+   (`scripts/track-upstream.sh` + `.github/workflows/track-upstream.yml`, scheduled daily) that
+   diffs the `grok` npm version, the ACP schema version, and Grok's tool-metadata schema/default
+   models against committed `compat/` snapshots and opens one classified PR (`security` /
+   `protocol` / `feature`) on drift — purely additive infra, never touches `src/` or `src-tauri/`.
+   Plus a read-only "Tools & Safety" section in Preferences (`readonly_tools` Tauri command,
+   `Preferences.tsx`) that displays the app's auto-approved read-only tool allowlist.
+   **The security-critical approval allowlist itself (`READONLY_TOOLS`, the hook scripts,
+   `build_permission_payload`, `respond_hook`) was NOT changed.** The app never auto-approves
+   based on anything Grok reports about its own tools (`x.ai/tool`, `read_only`, or otherwise) —
+   that metadata is display-only. Upstream drift is surfaced for a human to review, not consumed
+   to change what gets approved.
 1. The one refactor above (kills four bugs).
 2. ~~Surface grok's own capabilities — it advertises `available_commands`~~ — the slash-command
    piece is done (see 0a). Remaining: exposing `/compact`, `/context`, `/session-info`, and

@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Scratch dir for scripts/track-upstream.sh (repo-local, never committed)
+.compat-work/

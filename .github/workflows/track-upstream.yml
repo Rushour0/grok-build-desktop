@@ -1,0 +1,32 @@
+name: Track upstream Grok/ACP
+
+# Watcher-bot: detects upstream Grok CLI / ACP protocol drift on a schedule
+# and opens (or updates) one PR for a human to review. Never edits src/ or
+# src-tauri/ — see scripts/track-upstream.sh.
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-compat
+  cancel-in-progress: true
+
+jobs:
+  track:
+    name: Check upstream compatibility
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # gh CLI is preinstalled on GitHub-hosted ubuntu runners.
+      - name: Run upstream tracker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/track-upstream.sh

@@ -29,6 +29,7 @@ import {
   subscribe,
   listProjectFiles,
   grokVersion,
+  readonlyTools,
   type AuthMethod,
   type AuthStatus,
   type AvailableCommand,
@@ -467,6 +468,10 @@ export default function App() {
   // About section is opened and cached here so re-opening it doesn't re-spawn
   // the subprocess every time.
   const [cliVersion, setCliVersion] = useState<string | null>(null);
+  // The app's hardcoded default-deny read-only tool allowlist, fetched once
+  // for Preferences' "Tools & Safety" section — mirrors cliVersion's lazy,
+  // cache-on-first-open pattern below.
+  const [readonlyToolsList, setReadonlyToolsList] = useState<string[] | undefined>(undefined);
   // Full auth/install status, captured at bootstrap alongside the existing
   // `grok_installed` check — About needs the path and sign-in state too.
   const [authInfo, setAuthInfo] = useState<AuthStatus | null>(null);
@@ -777,6 +782,22 @@ export default function App() {
       cancelled = true;
     };
   }, [prefsOpen, cliVersion]);
+
+  // Same lazy-and-cache pattern as cliVersion above: the readonly allowlist
+  // is a static Rust-side constant, but there's no reason to invoke it before
+  // Preferences' "Tools & Safety" section is actually looked at.
+  useEffect(() => {
+    if (!prefsOpen || readonlyToolsList !== undefined) return;
+    let cancelled = false;
+    readonlyTools()
+      .then((tools) => {
+        if (!cancelled) setReadonlyToolsList(tools);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [prefsOpen, readonlyToolsList]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2180,6 +2201,7 @@ export default function App() {
         cliVersion={cliVersion}
         hasLogin={authInfo?.has_login}
         onCheckUpdates={() => void askUpdate()}
+        readonlyTools={readonlyToolsList}
       />
     </div>
   );

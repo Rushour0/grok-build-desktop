@@ -106,6 +106,26 @@ behavior — it cannot make Windows less safe. Windows users: please report whet
 Allow/Deny prompt appears. **Use this on a folder under version control**, so you can
 always `git diff` and undo.
 
+As of v0.9.3, Preferences has a read-only **Tools & Safety** panel that shows the exact list of
+local read-only tools the app auto-approves. It's transparency only — the panel does not change
+what gets approved, and it never will be driven by anything Grok reports about itself (see
+below).
+
+## Watching for upstream drift
+
+v0.9.3 adds a scheduled CI job (`scripts/track-upstream.sh`, `.github/workflows/track-upstream.yml`)
+that checks xAI's `grok` npm package version, the ACP schema version, and Grok's own tool-metadata
+schema and default models against snapshots committed in `compat/`. If any of them drift, it opens
+a single PR classifying the change (`security` / `protocol` / `feature`) for a human to review — it
+never edits `src/` or `src-tauri/` itself, and it never touches the approval allowlist.
+
+**This does not change how anything gets approved.** The app's default-deny allowlist
+(`READONLY_TOOLS` in `src-tauri/src/lib.rs`) is unchanged in v0.9.3 and remains the sole authority
+over what runs automatically. Grok-reported tool metadata (`x.ai/tool`, including any `read_only`
+flag) is display-only everywhere in this app — it is never consulted to decide whether something
+auto-approves. The watcher-bot exists so a human notices upstream drift quickly; it does not grant
+Grok, or its own metadata, any new trust.
+
 ## Roadmap
 
 - [x] Auto-install the Grok Build CLI from inside the app
@@ -129,6 +149,8 @@ always `git diff` and undo.
   @-mention file autocomplete — v0.9.1
 - [x] Preferences (Cmd/Ctrl+,), Light/Dark/System theme toggle, and a model + reasoning-effort
   panel — v0.9.2
+- [x] An upstream watcher-bot that opens a PR when Grok/ACP tool schema, models, or versions
+  drift, plus a read-only Tools & Safety panel in Preferences — v0.9.3
 
 Not yet, on the list:
 

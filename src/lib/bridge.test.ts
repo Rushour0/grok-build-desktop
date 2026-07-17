@@ -32,6 +32,7 @@ import {
   openProject,
   openSession,
   pendingResume,
+  readonlyTools,
   recentProjects,
   respondHook,
   respondPermission,
@@ -210,6 +211,11 @@ describe("commands: name and argument contract", () => {
     await grokVersion();
     expect(invoke).toHaveBeenCalledWith("grok_version");
   });
+
+  it("readonly_tools takes no arguments", async () => {
+    await readonlyTools();
+    expect(invoke).toHaveBeenCalledWith("readonly_tools");
+  });
 });
 
 describe("commands: results and failures pass through untouched", () => {
@@ -251,6 +257,12 @@ describe("commands: results and failures pass through untouched", () => {
   it("rejects grok_version rather than returning empty on failure (HANDOFF #3)", async () => {
     invoke.mockRejectedValue(new Error("grok not found"));
     await expect(grokVersion()).rejects.toThrow("grok not found");
+  });
+
+  it("resolves readonly_tools with the allowlist Rust returned", async () => {
+    const tools = ["read_file", "list_dir", "grep"];
+    invoke.mockResolvedValue(tools);
+    await expect(readonlyTools()).resolves.toEqual(tools);
   });
 });
 

@@ -22,6 +22,11 @@ export interface PrefsProps {
   cliVersion?: string | null;
   hasLogin?: boolean;
   onCheckUpdates?: () => void;
+  /** Names of the app's hardcoded, auto-approved read-only tools (from the
+   *  Rust default-deny allowlist). Display-only — this list is never used
+   *  to decide anything client-side; it just tells the user what the
+   *  backend already auto-approves. */
+  readonlyTools?: string[];
 }
 
 const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
@@ -47,6 +52,7 @@ export function Preferences({
   cliVersion,
   hasLogin,
   onCheckUpdates,
+  readonlyTools,
 }: PrefsProps) {
   // ESC closes, same as the command palette. Only listen while open so this
   // never intercepts ESC elsewhere in the app.
@@ -138,6 +144,29 @@ export function Preferences({
           </div>
           <div className="prefs-row">
             <span>Signed in: {hasLogin ? "yes" : "no"}</span>
+          </div>
+        </div>
+
+        <div className="prefs-section">
+          <div className="prefs-section-title">Tools &amp; Safety</div>
+          <div className="prefs-row">
+            <span>
+              Grok's file edits and shell commands always ask you first. Only these local
+              read-only tools run automatically:
+            </span>
+          </div>
+          <div className="prefs-row prefs-tool-chips">
+            {(readonlyTools ?? []).map((tool) => (
+              <span className="prefs-tool-chip" key={tool}>
+                {tool}
+              </span>
+            ))}
+          </div>
+          <div className="prefs-row">
+            <span className="prefs-hint">
+              Everything else — writing files, running commands, network access — needs your
+              approval. This is best-effort risk reduction, not a hard sandbox.
+            </span>
           </div>
         </div>
 

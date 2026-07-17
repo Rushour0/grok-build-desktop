@@ -2960,6 +2960,16 @@ async fn shutdown_all(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Expose the app's hardcoded read-only auto-approval allowlist to the UI, for display only.
+///
+/// Transparency, not authority: this just clones `READONLY_TOOLS` so Preferences can show the
+/// user what runs unattended. The hook script's `case` arm remains the sole enforcement point —
+/// nothing reads this value back into the approval path.
+#[tauri::command]
+fn readonly_tools() -> Vec<String> {
+    READONLY_TOOLS.iter().map(|s| s.to_string()).collect()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Before anything can arm a gate: clear the previous run's stale `live/` markers.
@@ -3048,7 +3058,8 @@ pub fn run() {
             send_prompt,
             cancel,
             busy_sessions,
-            shutdown_all
+            shutdown_all,
+            readonly_tools
         ]);
 
     // Registered separately from the teardown handler above — Builder handlers stack
@@ -4695,6 +4706,14 @@ mod tests {
         let unique: HashSet<&&str> = READONLY_TOOLS.iter().collect();
         assert_eq!(unique.len(), READONLY_TOOLS.len(), "duplicate entry");
         assert!(!READONLY_TOOLS.iter().any(|t| t.is_empty()));
+    }
+
+    /// The `readonly_tools` command is a pure clone of `READONLY_TOOLS` — nothing added,
+    /// nothing dropped, same order. It exists for display in Preferences only.
+    #[test]
+    fn readonly_tools_command_mirrors_the_allowlist() {
+        let expected: Vec<String> = READONLY_TOOLS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(readonly_tools(), expected);
     }
 
     /// The hook FAILS CLOSED: after its internal deadline it prints an explicit deny

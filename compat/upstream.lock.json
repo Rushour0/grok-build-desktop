@@ -1,0 +1,20 @@
+{
+  "sources": {
+    "npm": {
+      "url": "https://registry.npmjs.org/@xai-official%2Fgrok/latest",
+      "lastSeen": "0.2.103"
+    },
+    "toolMetaSchema": {
+      "url": "https://raw.githubusercontent.com/xai-org/grok-build/main/crates/codegen/xai-grok-tools/schema/tool_meta.schema.json",
+      "lastSeen": "committed snapshot: compat/tool_meta.schema.json"
+    },
+    "defaultModels": {
+      "url": "https://raw.githubusercontent.com/xai-org/grok-build/main/crates/codegen/xai-grok-models/default_models.json",
+      "lastSeen": "committed snapshot: compat/default_models.json"
+    },
+    "acp": {
+      "url": "https://api.github.com/repos/agentclientprotocol/agent-client-protocol/releases?per_page=30",
+      "lastSeen": "schema-v1.19.0"
+    }
+  }
+}
