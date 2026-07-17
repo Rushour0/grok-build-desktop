@@ -54,6 +54,13 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
+      # Serialize the platform builds. tauri-action's `includeUpdaterJson` does a
+      # read-modify-write of the SAME draft `latest.json` per matrix leg; run in
+      # parallel, the legs race and clobber each other's platform entries, so the
+      # manifest ends up missing platforms and the publish gate (correctly) refuses.
+      # Serial legs each merge into the previous leg's manifest — no race. Slower,
+      # but a reliable release beats a fast broken one.
+      max-parallel: 1
       matrix:
         include:
           - platform: macos-latest
