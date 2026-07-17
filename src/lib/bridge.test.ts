@@ -24,6 +24,7 @@ import {
   busySessions,
   cancelRun,
   connect,
+  grokVersion,
   installGrok,
   listProjectFiles,
   listSessions,
@@ -35,6 +36,7 @@ import {
   respondHook,
   respondPermission,
   searchSessions,
+  type SessionModelInfo,
   type SessionUpdate,
   sendPrompt,
   shutdownAll,
@@ -203,6 +205,11 @@ describe("commands: name and argument contract", () => {
     await listProjectFiles("/repo/app");
     expect(invoke).toHaveBeenCalledWith("list_project_files", { cwd: "/repo/app" });
   });
+
+  it("grok_version takes no arguments", async () => {
+    await grokVersion();
+    expect(invoke).toHaveBeenCalledWith("grok_version");
+  });
 });
 
 describe("commands: results and failures pass through untouched", () => {
@@ -234,6 +241,16 @@ describe("commands: results and failures pass through untouched", () => {
     // some places, an error card in others). The bridge must not decide for them.
     invoke.mockRejectedValue(new Error("That window was closed."));
     await expect(connect("tab-1", "/repo/app")).rejects.toThrow("That window was closed.");
+  });
+
+  it("resolves grok_version with the trimmed version string", async () => {
+    invoke.mockResolvedValue("grok 0.2.101");
+    await expect(grokVersion()).resolves.toBe("grok 0.2.101");
+  });
+
+  it("rejects grok_version rather than returning empty on failure (HANDOFF #3)", async () => {
+    invoke.mockRejectedValue(new Error("grok not found"));
+    await expect(grokVersion()).rejects.toThrow("grok not found");
   });
 });
 
@@ -274,6 +291,7 @@ function spyHandlers() {
     onAuth: vi.fn(),
     onConnect: vi.fn(),
     onInstall: vi.fn(),
+    onSessionInfo: vi.fn(),
   };
 }
 
@@ -285,11 +303,11 @@ describe("subscribe: wiring", () => {
     // that module is mocked to nothing here, so a global call would throw.
     const capture = captureListeners();
     await subscribe(spyHandlers());
-    expect(listen).toHaveBeenCalledTimes(8);
-    expect(capture.names()).toHaveLength(8);
+    expect(listen).toHaveBeenCalledTimes(9);
+    expect(capture.names()).toHaveLength(9);
   });
 
-  it("registers exactly the eight known event names", async () => {
+  it("registers exactly the nine known event names", async () => {
     const capture = captureListeners();
     await subscribe(spyHandlers());
     expect(capture.names().sort()).toEqual(
@@ -300,6 +318,7 @@ describe("subscribe: wiring", () => {
         "acp-error",
         "acp-install",
         "acp-permission",
+        "acp-session-info",
         "acp-turn-end",
         "acp-update",
       ].sort(),
@@ -310,7 +329,7 @@ describe("subscribe: wiring", () => {
     const capture = captureListeners();
     const off = await subscribe(spyHandlers());
     off();
-    expect(capture.unlisteners).toHaveLength(8);
+    expect(capture.unlisteners).toHaveLength(9);
     for (const unlisten of capture.unlisteners) expect(unlisten).toHaveBeenCalledTimes(1);
   });
 });
@@ -432,6 +451,35 @@ describe("subscribe: event routing", () => {
     capture.emit("acp-install", install);
     expect(h.onInstall).toHaveBeenCalledWith(install);
   });
+
+  it("routes acp-session-info's model to onSessionInfo, typing accepts SessionModelInfo", async () => {
+    // Compile-time contract: SessionModelInfo's fields all stay optional and
+    // nested under `model`, matching what Rust's parse_session_model extracts.
+    const model: SessionModelInfo = {
+      currentModelId: "grok-4",
+      model: {
+        name: "Grok 4",
+        description: "Fast, general-purpose",
+        totalContextTokens: 256000,
+        supportsReasoningEffort: true,
+        reasoningEffort: "high",
+        reasoningEfforts: ["low", "medium", "high"],
+      },
+    };
+    const capture = captureListeners();
+    const h = spyHandlers();
+    await subscribe(h);
+    capture.emit("acp-session-info", { tabId: "tab-1", model });
+    expect(h.onSessionInfo).toHaveBeenCalledWith("tab-1", model);
+  });
+
+  it("drops an acp-session-info carrying no model", async () => {
+    const capture = captureListeners();
+    const h = spyHandlers();
+    await subscribe(h);
+    capture.emit("acp-session-info", { tabId: "tab-1" });
+    expect(h.onSessionInfo).not.toHaveBeenCalled();
+  });
 });
 
 describe("subscribe: absent payloads and optional handlers", () => {
@@ -444,6 +492,7 @@ describe("subscribe: absent payloads and optional handlers", () => {
     "acp-auth",
     "acp-connect",
     "acp-install",
+    "acp-session-info",
   ])("survives a null payload on %s", async (event) => {
     const capture = captureListeners();
     const h = spyHandlers();
@@ -456,11 +505,13 @@ describe("subscribe: absent payloads and optional handlers", () => {
     ["acp-auth", { tabId: "tab-1", status: "ok" }],
     ["acp-connect", { tabId: "tab-1", stage: "ready" }],
     ["acp-install", { status: "done" }],
+    ["acp-session-info", { tabId: "tab-1", model: { currentModelId: "grok-4" } }],
   ])("survives %s when the optional handler is omitted", async (event, payload) => {
-    // onAuth/onConnect/onInstall are optional in `Handlers`. A caller that wants
-    // only the core five must not crash on an event it never asked about.
+    // onAuth/onConnect/onInstall/onSessionInfo are optional in `Handlers`. A
+    // caller that wants only the core five must not crash on an event it
+    // never asked about.
     const capture = captureListeners();
-    const { onAuth: _a, onConnect: _c, onInstall: _i, ...core } = spyHandlers();
+    const { onAuth: _a, onConnect: _c, onInstall: _i, onSessionInfo: _s, ...core } = spyHandlers();
     await subscribe(core);
     expect(() => capture.emit(event, payload)).not.toThrow();
   });

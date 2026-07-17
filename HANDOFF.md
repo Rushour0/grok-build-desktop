@@ -5,7 +5,7 @@ Agent Client Protocol (ACP) over the child's stdio, and forwards the live sessio
 webview. Independent and unofficial: it drives the upstream CLI at runtime and does not
 redistribute it. See `NOTICE`.
 
-Current version: **0.9.1**.
+Current version: **0.9.2**.
 
 ```text
 webview (React)  --invoke-->  Rust host  --stdin-->   grok agent stdio

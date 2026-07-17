@@ -28,12 +28,15 @@ import {
   shutdownAll,
   subscribe,
   listProjectFiles,
+  grokVersion,
   type AuthMethod,
+  type AuthStatus,
   type AvailableCommand,
   type PermissionRequest,
   type Project,
   type SearchHit,
   type SessionMeta,
+  type SessionModelInfo,
   type SessionUpdate,
 } from "./lib/bridge";
 import { toolFieldsFromCall, mergeToolUpdate, type ToolFields } from "./lib/toolMeta";
@@ -41,7 +44,9 @@ import { ToolCard } from "./ToolCard";
 import { CodeBlock } from "./CodeBlock";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
 import { Autocomplete, type AcItem } from "./Autocomplete";
+import { Preferences } from "./Preferences";
 import { filterSlash, filterFiles, detectTrigger, applyPick } from "./lib/commands";
+import { isThemePref, applyTheme, type ThemePref } from "./lib/theme";
 import "./App.css";
 
 // Installation is global. A *window* owns one project folder (Rust decides which,
@@ -146,6 +151,11 @@ export interface Tab {
   /// Fetched lazily on the first "@" trigger and cached here so retyping "@"
   /// doesn't re-walk the project tree on every keystroke.
   projectFiles?: string[];
+  /// Model/reasoning-effort state from the most recent `acp-session-info`
+  /// (carried on `session/new`/`session/load`). `undefined` until the CLI
+  /// has actually told us — the Preferences "Model" section falls back to
+  /// "Unknown" rather than assuming a model that was never confirmed.
+  sessionInfo?: SessionModelInfo;
 }
 
 let nextTabId = 1;
@@ -439,6 +449,27 @@ export default function App() {
       return true;
     }
   });
+  // Theme preference (Light/Dark/System), persisted the same way `sidebarOpen`
+  // is: read once at init, written back on every change. "system" is the
+  // default so a first launch matches the OS instead of forcing light/dark.
+  const [theme, setTheme] = useState<ThemePref>(() => {
+    try {
+      const stored = localStorage.getItem("theme");
+      return isThemePref(stored) ? stored : "system";
+    } catch {
+      return "system";
+    }
+  });
+  // The Preferences overlay (gear button / ⌘, / palette action). Not a Stage —
+  // it floats over whatever screen is already showing, like the command palette.
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  // The CLI's `--version` output, fetched lazily the first time Preferences'
+  // About section is opened and cached here so re-opening it doesn't re-spawn
+  // the subprocess every time.
+  const [cliVersion, setCliVersion] = useState<string | null>(null);
+  // Full auth/install status, captured at bootstrap alongside the existing
+  // `grok_installed` check — About needs the path and sign-in state too.
+  const [authInfo, setAuthInfo] = useState<AuthStatus | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [recents, setRecents] = useState<Project[]>([]);
   /// An `open_project` is in flight. Decoration for the launcher's wait, nothing
@@ -582,6 +613,27 @@ export default function App() {
     };
   }, []);
 
+  // Persist the theme choice the same way `sidebarOpen` is persisted above.
+  useEffect(() => {
+    try {
+      localStorage.setItem("theme", theme);
+    } catch {
+      // A private-mode window with no storage still works; it just won't remember the choice.
+    }
+  }, [theme]);
+
+  // Paint the choice, and for "system" stay in sync with OS changes while
+  // that preference is active — a user who leaves this on "system" and then
+  // flips their OS appearance shouldn't need to reopen the app to see it.
+  useEffect(() => {
+    applyTheme(theme);
+    if (theme !== "system") return;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyTheme(theme);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, [theme]);
+
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [activeTab?.items, activeTab?.busy]);
@@ -608,9 +660,9 @@ export default function App() {
       // shouldn't lose the answer.
       const cwd = await windowProject().catch(() => null);
       setProjectCwd(cwd);
-      const installed = await authStatus()
-        .then((s) => s.grok_installed)
-        .catch(() => false);
+      const status = await authStatus().catch(() => null);
+      setAuthInfo(status);
+      const installed = status?.grok_installed ?? false;
       if (!installed) {
         setStage("needs-install");
         return;
@@ -710,6 +762,22 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // The CLI version subprocess only needs to run once Preferences' About
+  // section is actually looked at, and only once ever per window — cached
+  // in `cliVersion` so a second open doesn't re-spawn `grok --version`.
+  useEffect(() => {
+    if (!prefsOpen || cliVersion !== null) return;
+    let cancelled = false;
+    grokVersion()
+      .then((v) => {
+        if (!cancelled) setCliVersion(v);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [prefsOpen, cliVersion]);
+
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
@@ -790,6 +858,12 @@ export default function App() {
       if (event.key === "k" || event.key === "K") {
         event.preventDefault();
         setPaletteOpen(true);
+        return;
+      }
+      // Cmd/Ctrl+, opens Preferences — the platform-standard shortcut.
+      if (event.key === ",") {
+        event.preventDefault();
+        setPrefsOpen(true);
         return;
       }
       if (event.key !== "w" && event.key !== "W") return;
@@ -978,6 +1052,9 @@ export default function App() {
   useEffect(() => {
     const off = subscribe({
       onUpdate,
+      onSessionInfo: (tabId, info) => {
+        updateTab(tabId, (tab) => ({ ...tab, sessionInfo: info }));
+      },
       onAuth: (tabId, auth) => {
         if (!tabsRef.current.some((tab) => tab.id === tabId)) return;
         clearAuthTimer(tabId);
@@ -1576,6 +1653,13 @@ export default function App() {
           searchInputRef.current?.focus();
         },
       },
+      {
+        id: "preferences",
+        title: "Preferences",
+        hint: "⌘,",
+        keywords: "preferences settings theme appearance model effort about updates keyboard",
+        run: () => setPrefsOpen(true),
+      },
     ];
     if (activeTabId) {
       actions.push({
@@ -1588,6 +1672,27 @@ export default function App() {
     }
     return actions;
   }, [sidebarOpen, activeTabId]);
+
+  // Gate the effort picker on grok having actually advertised an effort/model
+  // slash command *for this session* — there's no dedicated RPC to change it,
+  // only the CLI's own convention, and offering a picker that sends a command
+  // grok never mentioned would just fail silently.
+  const effortCommandAvailable = (activeTab?.availableCommands ?? []).some((c) =>
+    /^(effort|model)$/.test(c.name),
+  );
+  const onSetEffort = useCallback(
+    (level: string) => {
+      if (!activeTab || activeTab.busy) return;
+      void sendPrompt(activeTab.id, `/effort ${level}`);
+    },
+    [activeTab],
+  );
+  // Read-only mirror of the palette actions, title+hint only — Preferences'
+  // Keyboard section lists shortcuts, it never triggers them.
+  const prefsShortcuts = useMemo(
+    () => paletteActions.filter((a) => a.hint).map((a) => ({ title: a.title, hint: a.hint })),
+    [paletteActions],
+  );
 
   const banner = update ? (
     <UpdateBanner
@@ -1673,6 +1778,27 @@ export default function App() {
           </svg>
         </button>
         <div className="titlebar-drag" data-tauri-drag-region />
+        <button
+          className="prefs-toggle"
+          onClick={() => setPrefsOpen(true)}
+          title="Preferences (⌘,)"
+          aria-label="Open preferences"
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
       </div>
       {banner}
       <div className="shell-body">
@@ -2041,6 +2167,20 @@ export default function App() {
         </main>
       </div>
       <CommandPalette open={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
+      <Preferences
+        open={prefsOpen}
+        onClose={() => setPrefsOpen(false)}
+        theme={theme}
+        onThemeChange={setTheme}
+        sessionInfo={activeTab?.sessionInfo}
+        effortCommandAvailable={effortCommandAvailable}
+        onSetEffort={onSetEffort}
+        shortcuts={prefsShortcuts}
+        cliPath={authInfo?.grok_path ?? null}
+        cliVersion={cliVersion}
+        hasLogin={authInfo?.has_login}
+        onCheckUpdates={() => void askUpdate()}
+      />
     </div>
   );
 }

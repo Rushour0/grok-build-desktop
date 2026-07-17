@@ -1459,6 +1459,77 @@ fn respond_hook(
     write_decision(&tool_use_id, allow)
 }
 
+/// Pulls the model state a `session/new`/`session/load` response carries alongside
+/// `sessionId` into a compact `{ currentModelId?, model?: {...} }` shape.
+///
+/// The response's model-state field isn't part of the frozen `sessionId` contract this
+/// file already parses, so this is deliberately tolerant of shape: some agent builds
+/// hang it off `result.models`, others `result.modelState`, others bury it in
+/// `result._meta`. Whichever container has it wins; the raw `result` itself is the
+/// last fallback for an agent that puts `currentModelId`/`availableModels` top-level.
+/// Returns `None` when the response carries no model info at all — additive-only,
+/// never a hard error, since the caller (`new_session`/`load_existing_session`) must
+/// keep working against agents that don't advertise model state.
+fn parse_session_model(result: &Value) -> Option<Value> {
+    let container = result
+        .get("models")
+        .or_else(|| result.get("modelState"))
+        .or_else(|| result.get("_meta"))
+        .unwrap_or(result);
+
+    let current_model_id = container.get("currentModelId").and_then(Value::as_str);
+
+    // Prefer the entry matching `currentModelId`; fall back to the list's first entry
+    // so a response that omits `currentModelId` (but still advertises one model) still
+    // surfaces something.
+    let model_entry = container
+        .get("availableModels")
+        .and_then(Value::as_array)
+        .and_then(|models| {
+            current_model_id
+                .and_then(|cid| {
+                    models.iter().find(|m| {
+                        m.get("modelId").and_then(Value::as_str) == Some(cid)
+                            || m.get("id").and_then(Value::as_str) == Some(cid)
+                    })
+                })
+                .or_else(|| models.first())
+        });
+
+    if current_model_id.is_none() && model_entry.is_none() {
+        return None;
+    }
+
+    let mut out = serde_json::Map::new();
+    if let Some(cid) = current_model_id {
+        out.insert("currentModelId".into(), Value::String(cid.to_string()));
+    }
+    if let Some(m) = model_entry {
+        let mut model = serde_json::Map::new();
+        for field in [
+            "name",
+            "description",
+            "totalContextTokens",
+            "supportsReasoningEffort",
+            "reasoningEffort",
+            "reasoningEfforts",
+        ] {
+            if let Some(v) = m.get(field) {
+                model.insert(field.to_string(), v.clone());
+            }
+        }
+        if !model.is_empty() {
+            out.insert("model".into(), Value::Object(model));
+        }
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(Value::Object(out))
+    }
+}
+
 /// Ask the live agent for a session in `cwd`. Separated so it can be retried after sign-in.
 fn new_session(
     app: &AppHandle,
@@ -1494,6 +1565,16 @@ fn new_session(
                 .and_then(Value::as_str)
                 .ok_or("grok didn't return a sessionId")?
                 .to_string();
+            // Additive: model state rides alongside `sessionId` in the same response,
+            // so surface it right after parsing that — a session with no model info at
+            // all (an agent that doesn't advertise it) just emits nothing here.
+            if let Some(model_info) = parse_session_model(&result) {
+                session_key.emit(
+                    app,
+                    "acp-session-info",
+                    json!({"sessionId": id, "model": model_info}),
+                );
+            }
             // Clone the Arcs out under the guard; `start_approval` runs after it drops.
             let armed = if let Ok(mut guard) = state.inner.lock() {
                 guard.get_mut(key).map(|s| {
@@ -1554,8 +1635,17 @@ fn load_existing_session(
         .map_err(|_| "grok didn't answer `session/load` in time".to_string())?;
 
     match outcome {
-        Ok(_) => {
+        Ok(result) => {
             let id = session_id.to_string();
+            // Additive, same as `new_session`: emit model state if this response
+            // carried any, right after the id is settled.
+            if let Some(model_info) = parse_session_model(&result) {
+                session_key.emit(
+                    app,
+                    "acp-session-info",
+                    json!({"sessionId": id, "model": model_info}),
+                );
+            }
             let armed = if let Ok(mut guard) = state.inner.lock() {
                 guard.get_mut(key).map(|s| {
                     // `connect` opens a throwaway session first. Its watcher only
@@ -2147,6 +2237,36 @@ fn auth_status_inner() -> AuthStatus {
             .map(|h| h.join(".grok/auth.json").exists())
             .unwrap_or(false),
     }
+}
+
+/// The CLI's own `--version` line, trimmed. A blocking subprocess call, so — same
+/// doctrine as `grok_installed`/`auth_status` — it runs off the async runtime's
+/// worker pool via `spawn_blocking`, never inline on the command thread.
+#[tauri::command]
+async fn grok_version() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(grok_version_inner)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn grok_version_inner() -> Result<String, String> {
+    let grok = resolve_grok().ok_or("grok CLI not found")?;
+    let output = Command::new(&grok)
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("couldn't run `grok --version`: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`grok --version` exited with {}",
+            output.status
+        ));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let first_line = text.lines().next().unwrap_or("").trim().to_string();
+    if first_line.is_empty() {
+        return Err("`grok --version` printed nothing".to_string());
+    }
+    Ok(first_line)
 }
 
 // ---- CLI install -------------------------------------------------------------
@@ -2910,6 +3030,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             grok_installed,
             auth_status,
+            grok_version,
             install_grok,
             recent_projects,
             list_sessions,
@@ -3239,6 +3360,77 @@ mod tests {
         let mut map: HashMap<SessionKey, u32> = HashMap::new();
         map.insert(original, 21);
         assert_eq!(map.get(&cloned), Some(&21), "a clone must find its own entry");
+    }
+
+    /// A representative `session/new` response: `currentModelId` + `availableModels`
+    /// nested under `models`, the shape this app has actually observed. Covers the
+    /// happy path (find the matching entry, keep only the documented fields) and the
+    /// "no model state at all" / "no matching entry" edges in one place.
+    #[test]
+    fn parse_session_model_extracts_the_current_model() {
+        let result = json!({
+            "sessionId": "s1",
+            "models": {
+                "currentModelId": "grok-4",
+                "availableModels": [
+                    {
+                        "modelId": "grok-4",
+                        "name": "Grok 4",
+                        "description": "Flagship reasoning model",
+                        "totalContextTokens": 256000,
+                        "supportsReasoningEffort": true,
+                        "reasoningEffort": "high",
+                        "reasoningEfforts": ["low", "medium", "high"],
+                        "irrelevantField": "ignored"
+                    },
+                    {
+                        "modelId": "grok-4-fast",
+                        "name": "Grok 4 Fast"
+                    }
+                ]
+            }
+        });
+
+        let info = parse_session_model(&result).expect("model info present");
+        assert_eq!(info["currentModelId"], json!("grok-4"));
+        assert_eq!(info["model"]["name"], json!("Grok 4"));
+        assert_eq!(info["model"]["description"], json!("Flagship reasoning model"));
+        assert_eq!(info["model"]["totalContextTokens"], json!(256000));
+        assert_eq!(info["model"]["supportsReasoningEffort"], json!(true));
+        assert_eq!(info["model"]["reasoningEffort"], json!("high"));
+        assert_eq!(
+            info["model"]["reasoningEfforts"],
+            json!(["low", "medium", "high"])
+        );
+        // Only the documented fields are copied — an unknown field never leaks through.
+        assert!(info["model"].get("irrelevantField").is_none());
+    }
+
+    /// A response that carries no model state at all (an agent that doesn't advertise
+    /// it) must yield `None`, not a mostly-empty object — the caller uses `Some`/`None`
+    /// to decide whether to emit `acp-session-info` at all.
+    #[test]
+    fn parse_session_model_is_none_when_absent() {
+        let result = json!({"sessionId": "s1"});
+        assert_eq!(parse_session_model(&result), None);
+    }
+
+    /// Tolerates the `modelState`-shaped alternative, and falls back to the list's
+    /// first entry when `currentModelId` doesn't match any `availableModels` entry.
+    #[test]
+    fn parse_session_model_tolerates_modelstate_and_falls_back_to_first_entry() {
+        let result = json!({
+            "sessionId": "s1",
+            "modelState": {
+                "currentModelId": "unknown-id",
+                "availableModels": [
+                    {"id": "grok-4", "name": "Grok 4"}
+                ]
+            }
+        });
+        let info = parse_session_model(&result).expect("model info present");
+        assert_eq!(info["currentModelId"], json!("unknown-id"));
+        assert_eq!(info["model"]["name"], json!("Grok 4"));
     }
 
     #[cfg(desktop)]

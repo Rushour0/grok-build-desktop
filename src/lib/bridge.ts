@@ -132,6 +132,10 @@ export const respondHook = (tabId: string, toolUseId: string, allow: boolean) =>
 /// `.venv`, `__pycache__` are skipped; depth and count are capped Rust-side.
 export const listProjectFiles = (cwd: string) => invoke<string[]>("list_project_files", { cwd });
 
+/// The resolved grok binary's `--version` output (trimmed first line). Errors
+/// rather than returning empty on failure — see HANDOFF #3.
+export const grokVersion = () => invoke<string>("grok_version");
+
 // ---- ACP session/update payloads (Rust -> webview) ----
 // Shapes verified against grok 0.2.101's `initialize` response.
 
@@ -260,6 +264,22 @@ export interface InstallEvent {
   detail?: string;
 }
 
+/// Model/reasoning-effort state carried on `session/new` (and `session/load`)
+/// responses. Rust parses this out of the raw response and emits it as
+/// `acp-session-info` — the fields it can extract vary with what the CLI
+/// actually returned, so everything here is optional.
+export interface SessionModelInfo {
+  currentModelId?: string;
+  model?: {
+    name?: string;
+    description?: string;
+    totalContextTokens?: number;
+    supportsReasoningEffort?: boolean;
+    reasoningEffort?: string;
+    reasoningEfforts?: string[];
+  };
+}
+
 // ---- events (Rust -> webview) ----
 
 type Handlers = {
@@ -271,6 +291,7 @@ type Handlers = {
   onAuth?: (tabId: string, a: AcpAuth) => void;
   onConnect?: (tabId: string, c: AcpConnect) => void;
   onInstall?: (e: InstallEvent) => void;
+  onSessionInfo?: (tabId: string, info: SessionModelInfo) => void;
 };
 
 /// Subscribe to the agent stream. Returns a disposer that detaches every listener.
@@ -298,6 +319,9 @@ export async function subscribe(h: Handlers): Promise<UnlistenFn> {
     win.listen<AcpAuth>("acp-auth", (e) => e.payload && h.onAuth?.(e.payload.tabId, e.payload)),
     win.listen<AcpConnect>("acp-connect", (e) => e.payload && h.onConnect?.(e.payload.tabId, e.payload)),
     win.listen<InstallEvent>("acp-install", (e) => e.payload && h.onInstall?.(e.payload)),
+    win.listen<{ tabId: string; model?: SessionModelInfo }>("acp-session-info", (e) =>
+      e.payload?.model && h.onSessionInfo?.(e.payload.tabId, e.payload.model),
+    ),
   ]);
   return () => offs.forEach((off) => off());
 }

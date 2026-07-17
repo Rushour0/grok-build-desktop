@@ -64,6 +64,51 @@
   }
 }
 
+/* ---- explicit theme override (JS toggle) ----
+   The @media queries above are the "system" fallback (used when data-theme is unset). These
+   `:root[data-theme]` blocks duplicate the same token values so a user-chosen Light/Dark
+   preference (applied via applyTheme() in src/lib/theme.ts, which sets/removes
+   documentElement.dataset.theme) repaints identically regardless of the OS setting. ---- */
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --panel: #f7f7f8;
+  --line: #e4e4e7;
+  --ink: #18181b;
+  --ink-soft: #71717a;
+  --accent: #18181b;
+  --accent-ink: #ffffff;
+  --danger: #b42318;
+  --ok: #067647;
+
+  --rim: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --shadow-1: var(--rim), 0 1px 2px rgba(24, 24, 27, 0.06), 0 2px 6px rgba(24, 24, 27, 0.07);
+  --shadow-2: var(--rim), 0 2px 6px rgba(24, 24, 27, 0.08), 0 10px 24px rgba(24, 24, 27, 0.12);
+  --shadow-3: var(--rim), 0 6px 14px rgba(24, 24, 27, 0.1), 0 22px 48px rgba(24, 24, 27, 0.18);
+  --sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0));
+  --sheen-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(0, 0, 0, 0.04));
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+:root[data-theme="dark"] {
+  --bg: #0c0c0d;
+  --panel: #161618;
+  --line: #26262a;
+  --ink: #f4f4f5;
+  --ink-soft: #a1a1aa;
+  --accent: #f4f4f5;
+  --accent-ink: #0c0c0d;
+  --danger: #ff6b6b;
+  --ok: #4ade80;
+
+  --rim: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --shadow-1: var(--rim), 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-2: var(--rim), 0 4px 12px rgba(0, 0, 0, 0.55), 0 12px 30px rgba(0, 0, 0, 0.5);
+  --shadow-3: var(--rim), 0 8px 20px rgba(0, 0, 0, 0.6), 0 26px 54px rgba(0, 0, 0, 0.6);
+  --sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0));
+  --sheen-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(0, 0, 0, 0.12));
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -2090,6 +2135,54 @@ textarea:focus-visible {
   }
 }
 
+/* Explicit-theme duplicate of the dark hljs palette above, so a JS-forced dark theme repaints
+   code the same way the OS-driven @media query would. Flat descendant selectors (matching this
+   file's convention — no CSS nesting is used elsewhere) rather than a nested rule. */
+:root[data-theme="dark"] .hljs-keyword,
+:root[data-theme="dark"] .hljs-selector-tag,
+:root[data-theme="dark"] .hljs-literal,
+:root[data-theme="dark"] .hljs-subst {
+  color: #c297ff;
+}
+:root[data-theme="dark"] .hljs-string,
+:root[data-theme="dark"] .hljs-addition,
+:root[data-theme="dark"] .hljs-regexp {
+  color: #4ade80;
+}
+:root[data-theme="dark"] .hljs-number,
+:root[data-theme="dark"] .hljs-symbol {
+  color: #e0a460;
+}
+:root[data-theme="dark"] .hljs-title,
+:root[data-theme="dark"] .hljs-function,
+:root[data-theme="dark"] .hljs-title.function_ {
+  color: #79b8ff;
+}
+:root[data-theme="dark"] .hljs-attr,
+:root[data-theme="dark"] .hljs-attribute,
+:root[data-theme="dark"] .hljs-variable,
+:root[data-theme="dark"] .hljs-template-variable {
+  color: #e0a460;
+}
+:root[data-theme="dark"] .hljs-built_in,
+:root[data-theme="dark"] .hljs-type,
+:root[data-theme="dark"] .hljs-class .hljs-title {
+  color: #79b8ff;
+}
+:root[data-theme="dark"] .hljs-tag,
+:root[data-theme="dark"] .hljs-name {
+  color: #79b8ff;
+}
+:root[data-theme="dark"] .hljs-selector-id,
+:root[data-theme="dark"] .hljs-selector-class,
+:root[data-theme="dark"] .hljs-selector-attr,
+:root[data-theme="dark"] .hljs-selector-pseudo {
+  color: #c297ff;
+}
+:root[data-theme="dark"] .hljs-deletion {
+  color: #ff6b6b;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .tool-card-body,
   .tool-card-status,
@@ -2282,6 +2375,154 @@ textarea:focus-visible {
   .cmdk-row,
   .composer-ac,
   .composer-ac-row {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* ---- preferences overlay (Cmd/Ctrl+,) ----
+   Same floating-layer idiom as the command palette: a soft scrim (not a full blackout) behind
+   a centered, sectioned panel. Reuses .cmdk-backdrop's scrim tuning via identical values so the
+   two overlays feel like one family rather than two different modal systems. ---- */
+
+.prefs-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+  background: rgba(0, 0, 0, 0.28);
+  animation: fade-up var(--dur-fast) var(--ease-standard) both;
+}
+@media (prefers-color-scheme: dark) {
+  .prefs-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+:root[data-theme="dark"] .prefs-backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="light"] .prefs-backdrop {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.prefs {
+  width: min(560px, calc(100vw - 2.5rem));
+  max-height: min(78vh, 640px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow-3);
+  animation: scale-in var(--dur) var(--ease-out) both;
+}
+
+.prefs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex: none;
+  padding: 0.9rem 1.1rem;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.prefs-body {
+  overflow-y: auto;
+  padding: 0.6rem 1.1rem 1.1rem;
+}
+
+.prefs-section {
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.prefs-section:last-child {
+  border-bottom: none;
+}
+
+.prefs-section-title {
+  margin: 0 0 0.55rem;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.prefs-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.4rem 0;
+  font-size: 0.86rem;
+}
+.prefs-row + .prefs-row {
+  border-top: 1px solid var(--line);
+}
+
+/* Segmented control (Appearance / reasoning-effort pickers). Same visual weight as a button
+   group, but the active option carries the accent so state is legible at a glance. */
+.seg {
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--bg);
+}
+
+.seg-btn {
+  padding: 0.35rem 0.7rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-out);
+}
+.seg-btn:hover {
+  color: var(--ink);
+}
+.seg-btn.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.prefs-kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--ink-soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
+.prefs-hint {
+  margin: 0.3rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prefs-backdrop,
+  .prefs,
+  .seg-btn {
     animation: none;
     transition: none;
   }

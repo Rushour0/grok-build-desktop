@@ -127,6 +127,8 @@ always `git diff` and undo.
   blocks with copy — v0.9.0
 - [x] Command palette (Cmd/Ctrl+K), slash-command palette from available_commands_update, and
   @-mention file autocomplete — v0.9.1
+- [x] Preferences (Cmd/Ctrl+,), Light/Dark/System theme toggle, and a model + reasoning-effort
+  panel — v0.9.2
 
 Not yet, on the list:
 
