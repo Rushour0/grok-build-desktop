@@ -9,6 +9,7 @@
 /// generic icon rather than rendering a blank or broken card.
 import { useState } from "react";
 import type { ToolItem } from "./App";
+import { detectDocFormat } from "./lib/docViewer/formatDetect";
 
 function prettyJson(value: unknown): string {
   if (value === undefined) return "";
@@ -36,7 +37,16 @@ function durationOf(item: ToolItem): string | null {
   return ((item.endedAt - item.startedAt) / 1000).toFixed(1) + "s";
 }
 
-export function ToolCard({ item }: { item: ToolItem }): React.ReactElement {
+export function ToolCard({
+  item,
+  onOpenDocument,
+}: {
+  item: ToolItem;
+  /// Open a previewable file (pdf/docx) in the in-app viewer. When absent, file
+  /// locations render as plain, non-clickable text (the default everywhere the
+  /// viewer isn't wired).
+  onOpenDocument?: (path: string) => void;
+}): React.ReactElement {
   const failed = item.status === "failed";
   const [expanded, setExpanded] = useState(failed);
 
@@ -74,12 +84,27 @@ export function ToolCard({ item }: { item: ToolItem }): React.ReactElement {
           )}
           {item.locations.length > 0 && (
             <div className="tool-card-locs">
-              {item.locations.map((l, i) => (
-                <span className="tool-loc" key={l.path + i}>
-                  {l.path}
-                  {l.line ? ":" + l.line : ""}
-                </span>
-              ))}
+              {item.locations.map((l, i) => {
+                const fmt = detectDocFormat(l.path);
+                const openable = onOpenDocument && (fmt === "pdf" || fmt === "docx");
+                return openable ? (
+                  <button
+                    type="button"
+                    className="tool-loc tool-loc-open"
+                    key={l.path + i}
+                    onClick={() => onOpenDocument!(l.path)}
+                    title="Open preview"
+                  >
+                    {l.path}
+                    {l.line ? ":" + l.line : ""}
+                  </button>
+                ) : (
+                  <span className="tool-loc" key={l.path + i}>
+                    {l.path}
+                    {l.line ? ":" + l.line : ""}
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>
