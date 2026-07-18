@@ -1851,6 +1851,11 @@ button.tab-close:hover {
 .composer {
   /* Fixed: the composer never shrinks or grows to steal the stream's space. */
   flex: none;
+  /* Anchor the "/" and "@" autocomplete: .composer-ac is position:absolute with
+     bottom:100%, so without a positioned ancestor here it anchored to .content and
+     was thrown to the top of the pane — the menu rendered offscreen, which read as
+     "autocomplete doesn't work". */
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
