@@ -7,6 +7,16 @@ to tagged GitHub releases.
 v0.9.7 was the final version on the original feature roadmap. v0.9.8 begins a UX-craft
 pass: making what already shipped feel intentional, and fixing the transcript.
 
+## [v0.9.9]
+
+### Added
+
+- **In-app PDF & DOCX viewer.** Click a `.pdf` or `.docx` file path in a tool card to
+  open it in a viewer — no leaving the app. PDFs render page-by-page with zoom; Word
+  documents render as clean, read-only prose. Everything loads on demand, and the file
+  read is scoped to the current project folder. (Legacy `.doc` shows an unsupported
+  notice — use `.docx`.)
+
 ## [v0.9.8]
 
 ### Added

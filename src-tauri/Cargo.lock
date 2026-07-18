@@ -1397,8 +1397,9 @@ dependencies = [
 
 [[package]]
 name = "grok-build-desktop"
-version = "0.9.8"
+version = "0.9.9"
 dependencies = [
+ "base64 0.22.1",
  "rusqlite",
  "serde",
  "serde_json",

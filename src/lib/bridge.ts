@@ -137,6 +137,9 @@ export const listProjectFiles = (cwd: string) => invoke<string[]>("list_project_
 /// picks the destination path.
 export const saveText = (path: string, content: string) => invoke<void>("save_text", { path, content });
 
+export const readFilePreview = (path: string, cwd: string) =>
+  invoke<{ base64: string; byteLength: number }>("read_file_preview", { path, cwd });
+
 /// The resolved grok binary's `--version` output (trimmed first line). Errors
 /// rather than returning empty on failure — see HANDOFF #3.
 export const grokVersion = () => invoke<string>("grok_version");

@@ -54,6 +54,7 @@ import { RewindPanel } from "./RewindPanel";
 import { normalizeRewindPoints, type RewindMode } from "./lib/rewind";
 import { TasksPanel } from "./TasksPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
+import { DocViewerPanel } from "./DocViewerPanel";
 import { FirstRunStepper } from "./FirstRunStepper";
 import { firstRunSteps } from "./lib/firstRun";
 import { CatPet } from "./CatPet";
@@ -496,6 +497,10 @@ export default function App() {
   // of the active tab's transcript, floating over whatever screen is showing,
   // same idiom as `prefsOpen`/`tasksOpen` above.
   const [receiptOpen, setReceiptOpen] = useState(false);
+  // The in-app PDF/DOCX viewer: which file (and the project it belongs to) is open,
+  // or null when the viewer is closed. cwd is captured at open time so the read
+  // stays scoped to that project's folder.
+  const [docViewer, setDocViewer] = useState<{ path: string; cwd: string } | null>(null);
   // The CLI's `--version` output, fetched lazily the first time Preferences'
   // About section is opened and cached here so re-opening it doesn't re-spawn
   // the subprocess every time.
@@ -2234,6 +2239,9 @@ export default function App() {
                       onRewindMessage={(item) => {
                         if (activeTab) void openRewind(activeTab, item);
                       }}
+                      onOpenDocument={(path) => {
+                        if (activeTab) setDocViewer({ path, cwd: activeTab.cwd });
+                      }}
                     />
                     {activeTab.busy && (
                       <div className="working">
@@ -2391,6 +2399,11 @@ export default function App() {
         onConfirm={(pointId, mode) => void confirmRewind(pointId, mode)}
       />
       <TasksPanel open={tasksOpen} onClose={() => setTasksOpen(false)} tasks={activeTab?.tasks ?? []} />
+      <DocViewerPanel
+        path={docViewer?.path ?? null}
+        cwd={docViewer?.cwd ?? ""}
+        onClose={() => setDocViewer(null)}
+      />
       <ReceiptPanel
         open={receiptOpen}
         onClose={() => setReceiptOpen(false)}
@@ -2534,6 +2547,7 @@ function TranscriptItems({
   onDecide,
   onEditMessage,
   onRewindMessage,
+  onOpenDocument,
 }: {
   items: Item[];
   /// The id of the answer bubble currently streaming, or null. Only decides whether this
@@ -2547,10 +2561,12 @@ function TranscriptItems({
   /// truncates history itself — the panel/App own fetching points and
   /// executing the restore.
   onRewindMessage?: (item: TextItem) => void;
+  /// Opens a previewable file (pdf/docx) referenced by a tool call in the in-app viewer.
+  onOpenDocument?: (path: string) => void;
 }) {
   return items.map((item) => {
     if (isTool(item)) {
-      return <ToolCard key={item.id} item={item} />;
+      return <ToolCard key={item.id} item={item} onOpenDocument={onOpenDocument} />;
     }
     if (isAsk(item)) return <PermissionCard key={item.id} item={item} onDecide={onDecide} />;
     if (isPlan(item)) return <PlanCard key={item.id} entries={item.entries} />;

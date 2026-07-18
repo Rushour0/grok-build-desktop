@@ -1940,6 +1940,50 @@ async fn save_text(path: String, content: String) -> Result<(), String> {
     .map_err(|e| format!("The save didn't finish: {e}"))?
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadFilePreviewResult {
+    base64: String,
+    byte_length: u64,
+}
+
+const MAX_PREVIEW_BYTES: u64 = 50 * 1024 * 1024;
+
+#[tauri::command]
+async fn read_file_preview(path: String, cwd: String) -> Result<ReadFilePreviewResult, String> {
+    // Reading arbitrary project files can block on disk, so keep it off the tokio worker.
+    tauri::async_runtime::spawn_blocking(move || read_file_preview_inner(&path, &cwd))
+        .await
+        .map_err(|e| format!("read task failed: {e}"))?
+}
+
+fn read_file_preview_inner(path: &str, cwd: &str) -> Result<ReadFilePreviewResult, String> {
+    use base64::Engine;
+
+    // Canonicalization is the security boundary: resolve both sides (including symlinks)
+    // before comparing, so a path suggestion from the webview cannot escape its project.
+    let root = std::fs::canonicalize(cwd).map_err(|e| format!("Can't resolve project root: {e}"))?;
+    let real = std::fs::canonicalize(path).map_err(|e| format!("Can't open `{path}`: {e}"))?;
+    if !real.starts_with(&root) {
+        return Err(format!(
+            "`{path}` is outside the project folder — refusing to read it."
+        ));
+    }
+    let meta = std::fs::metadata(&real).map_err(|e| format!("Can't stat `{path}`: {e}"))?;
+    if meta.len() > MAX_PREVIEW_BYTES {
+        return Err(format!(
+            "`{path}` is {}MB — too large to preview (cap is 50MB).",
+            meta.len() / (1024 * 1024)
+        ));
+    }
+    let bytes = std::fs::read(&real).map_err(|e| format!("Can't read `{path}`: {e}"))?;
+    let base64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(ReadFilePreviewResult {
+        base64,
+        byte_length: bytes.len() as u64,
+    })
+}
+
 fn walk_project_files(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
     if depth > MAX_WALK_DEPTH || out.len() >= MAX_WALK_FILES {
         return;
@@ -3161,6 +3205,7 @@ pub fn run() {
             list_sessions,
             list_project_files,
             save_text,
+            read_file_preview,
             search_sessions,
             open_project,
             window_project,
@@ -5976,5 +6021,40 @@ mod tests {
             MAX_WALK_FILES,
             "the walk stops cleanly at the cap instead of erroring or running unbounded"
         );
+    }
+
+    #[test]
+    fn read_file_preview_inner_reads_project_file_and_rejects_outside_path() {
+        use base64::Engine;
+
+        let project = TempProject::new();
+        let inside = project.root().join("preview.pdf");
+        let expected = b"small preview fixture";
+        std::fs::write(&inside, expected).expect("inside fixture");
+
+        let result = read_file_preview_inner(
+            &inside.to_string_lossy(),
+            &project.root().to_string_lossy(),
+        )
+        .expect("project file should be readable");
+        assert_eq!(result.byte_length, expected.len() as u64);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(result.base64)
+                .expect("valid base64"),
+            expected
+        );
+
+        let outside = TempProject::new();
+        let outside_file = outside.root().join("outside.pdf");
+        std::fs::write(&outside_file, b"must not be read").expect("outside fixture");
+        let error = match read_file_preview_inner(
+            &outside_file.to_string_lossy(),
+            &project.root().to_string_lossy(),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("outside project file must be rejected"),
+        };
+        assert!(error.contains("outside the project folder"));
     }
 }
