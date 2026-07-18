@@ -4,7 +4,39 @@ All notable changes to Grok Build Desktop are documented here. This project foll
 spirit of [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions below correspond
 to tagged GitHub releases.
 
-v0.9.7 is the final version on the original roadmap.
+v0.9.7 was the final version on the original feature roadmap. v0.9.8 begins a UX-craft
+pass: making what already shipped feel intentional, and fixing the transcript.
+
+## [v0.9.8]
+
+### Added
+
+- **First-run journey.** The install screen now shows the whole path to a first answer —
+  Install → Sign in → Open a project → First prompt — so a brand-new user sees where this
+  is going before anything happens.
+- **Turn-complete receipt.** A finished turn ends on a quiet "Done · Xs · N tokens" beat
+  instead of a flat usage line.
+- **Cold-open starters.** The empty composer offers a few starter prompts that fill (never
+  send) the draft.
+- **A resident cat.** A small cat now paces the header bar where a redundant "Close tab"
+  button used to be (every tab already has its own × in the strip).
+
+### Fixed
+
+- **The transcript scrolls.** A long conversation now scrolls instead of squeezing each
+  message shorter and shorter.
+- **No more hover bounce.** Hovering a message highlights it quietly instead of lifting and
+  tilting it.
+- **Images render properly** at their natural proportions instead of squashed.
+- **"/" and "@" autocomplete** now appears above the composer — the menu was being anchored
+  offscreen, so it looked like the feature was missing.
+
+### Changed
+
+- **Overlays feel designed, not dumped.** Preferences, Tasks, Rewind, and the receipt panel
+  drop the divider-per-row look for grouped cards and real spacing, gain a blurred backdrop so
+  the app no longer bleeds through, and empty states now teach instead of sitting blank. The
+  "Signed in" status shows a live indicator.
 
 ## [v0.9.7]
 
