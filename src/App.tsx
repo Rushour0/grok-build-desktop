@@ -54,6 +54,9 @@ import { RewindPanel } from "./RewindPanel";
 import { normalizeRewindPoints, type RewindMode } from "./lib/rewind";
 import { TasksPanel } from "./TasksPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
+import { FirstRunStepper } from "./FirstRunStepper";
+import { firstRunSteps } from "./lib/firstRun";
+import { CatPet } from "./CatPet";
 import { parseNotify, mergeTask, type TaskItem } from "./lib/notify";
 import { filterSlash, filterFiles, detectTrigger, applyPick } from "./lib/commands";
 import { isThemePref, applyTheme, type ThemePref } from "./lib/theme";
@@ -1862,6 +1865,16 @@ export default function App() {
         </button>
         <Progress line={stage === "installing" ? installLine : null} detail={installDetail} />
         {notice && <p className="notice error">{notice}</p>}
+        {/* The four-step path to a first answer, so a brand-new user sees where this
+            is going before anything happens. Install is the active step here. */}
+        <FirstRunStepper
+          steps={firstRunSteps({
+            stage,
+            signedIn: false,
+            hasProject: false,
+            hasSentFirstPrompt: false,
+          })}
+        />
       </Splash>
     );
   }
@@ -2175,9 +2188,9 @@ export default function App() {
                       {activeTab.usageTokens > 0 && (
                         <span className="usage-total">· {activeTab.usageTokens.toLocaleString()} tokens</span>
                       )}
-                      <button className="ghost" onClick={() => closeTab(activeTab.id)}>
-                        Close tab
-                      </button>
+                      {/* The cat lives where a redundant "Close tab" button used to be —
+                          every tab already has its own × in the strip above. */}
+                      <CatPet />
                     </div>
                   </header>
 

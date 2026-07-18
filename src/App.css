@@ -1005,6 +1005,12 @@ button.tab-close:hover {
 
 .stream {
   overflow-y: auto;
+  /* The one bounded scroll region: flex-grow to fill the content pane, and
+     min-height:0 so it is allowed to shrink below its content and scroll —
+     without this the transcript's own height wins and the *messages* get
+     squeezed shorter instead of the list scrolling. */
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 1.25rem;
   display: flex;
   flex-direction: column;
@@ -1027,14 +1033,17 @@ button.tab-close:hover {
    tips the top edge back so the lift has real dimension, not just a slide. Transform-only,
    so it stays on the compositor. */
 .stream > .bubble.answer,
+.stream > .bubble.answer,
 .stream > .ask,
 .stream > .plan {
-  transition: transform var(--dur) var(--ease-out);
+  /* Hover reads as a quiet highlight, not motion — no lift, no tilt, nothing that
+     shifts a message's position while you're reading it. */
+  transition: background var(--dur-fast) var(--ease-standard);
 }
 .stream > .bubble.answer:hover,
 .stream > .ask:hover,
 .stream > .plan:hover {
-  transform: translateY(-3px) rotateX(2deg);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
 }
 
 .empty {
@@ -1397,8 +1406,8 @@ button.tab-close:hover {
 .stream > .bubble-wrap:has(.bubble.answer) {
   transition: transform var(--dur) var(--ease-out);
 }
-.stream > .bubble-wrap:has(.bubble.answer):hover {
-  transform: translateY(-3px) rotateX(2deg);
+.stream > .bubble-wrap:has(.bubble.answer):hover .bubble.answer {
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
 }
 
 /* Hidden until the pointer or keyboard focus lands on the bubble it belongs to — a
@@ -1619,6 +1628,11 @@ button.tab-close:hover {
 
 .md img {
   max-width: 100%;
+  /* Keep aspect ratio and stop the image being vertically squashed by a flex
+     ancestor — it renders at its natural proportions, capped to the column. */
+  height: auto;
+  display: block;
+  border-radius: 8px;
 }
 
 .usage {
@@ -1828,7 +1842,15 @@ button.tab-close:hover {
   animation: scale-in var(--dur) var(--ease-out);
 }
 
+/* Every direct child of the stream keeps its natural height and never compresses —
+   the stream scrolls instead of the messages being squeezed shorter. */
+.stream > * {
+  flex: none;
+}
+
 .composer {
+  /* Fixed: the composer never shrinks or grows to steal the stream's space. */
+  flex: none;
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
@@ -3352,4 +3374,201 @@ textarea:focus-visible {
 .starter-chip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* ---- first-run journey ---- */
+.frs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  animation: fade-up var(--dur) var(--ease-out) both;
+}
+.frs-step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+.frs-marker {
+  position: relative;
+  display: flex;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.frs-marker svg {
+  width: 14px;
+  height: 14px;
+}
+.frs-done .frs-marker {
+  border-color: var(--ok);
+  background: var(--ok);
+  color: var(--bg);
+}
+.frs-done .frs-label {
+  color: var(--ink-soft);
+}
+.frs-active .frs-marker {
+  border-color: var(--ink);
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+.frs-active .frs-label {
+  color: var(--ink);
+  font-weight: 600;
+}
+.frs-pending .frs-marker {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+}
+.frs-pending .frs-label {
+  color: var(--ink-soft);
+}
+.frs-num {
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.frs-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
+}
+.frs-label {
+  font-size: 0.9rem;
+}
+.frs-hint {
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+.frs-step:not(:last-child) .frs-marker::after {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 1px;
+  height: var(--space-2);
+  background: var(--line);
+  content: "";
+  transform: translateX(-50%);
+}
+
+.frs-done-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: var(--sheen);
+  animation: fade-up var(--dur) var(--ease-out) both;
+}
+.frs-done-banner-icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  color: var(--ok);
+}
+.frs-done-banner-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.frs-done-banner-text {
+  font-size: 0.9rem;
+  color: var(--ink);
+}
+.frs-done-banner-text strong {
+  font-weight: 600;
+}
+.frs-done-banner-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .frs,
+  .frs-done-banner {
+    animation: none;
+  }
+}
+
+/* ---- the resident cat ----
+   A small cat that paces the header bar, where a redundant "Close tab" button used
+   to sit (every tab already has its own × in the strip). Decorative only. Monochrome
+   via currentColor; muted at rest, a touch darker when you say hello (hover). All the
+   life is CSS — pacing, a flipping turn at each end, a tail flick, an occasional
+   blink — and it all stops (cat sits still, centered) under reduced-motion. */
+.cat {
+  position: relative;
+  display: inline-block;
+  width: 108px;
+  height: 26px;
+  color: var(--ink-soft);
+  transition: color var(--dur) var(--ease-standard);
+}
+.cat:hover {
+  color: var(--ink);
+}
+.cat-walk {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  will-change: transform;
+  animation: cat-pace 11s var(--ease-standard) infinite;
+}
+.cat-svg {
+  width: 34px;
+  height: 24px;
+  display: block;
+}
+.cat-tail {
+  transform-origin: right center;
+  animation: cat-tail 1.7s ease-in-out infinite;
+}
+.cat-eye {
+  animation: cat-blink 5s steps(1, end) infinite;
+}
+
+/* Pace right (facing right), pause, flip, pace left (facing left), pause, flip back. */
+@keyframes cat-pace {
+  0%   { transform: translateX(0) scaleX(1); }
+  8%   { transform: translateX(0) scaleX(1); }
+  42%  { transform: translateX(72px) scaleX(1); }
+  50%  { transform: translateX(72px) scaleX(-1); }
+  58%  { transform: translateX(72px) scaleX(-1); }
+  92%  { transform: translateX(0) scaleX(-1); }
+  100% { transform: translateX(0) scaleX(1); }
+}
+@keyframes cat-tail {
+  0%, 100% { transform: rotate(0deg); }
+  50%      { transform: rotate(-16deg); }
+}
+@keyframes cat-blink {
+  0%, 92%, 100% { opacity: 1; }
+  95%           { opacity: 0.15; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cat-walk {
+    animation: none;
+    transform: translateX(36px);
+  }
+  .cat-tail,
+  .cat-eye {
+    animation: none;
+  }
 }
