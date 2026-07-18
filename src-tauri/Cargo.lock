@@ -1399,6 +1399,7 @@ dependencies = [
 name = "grok-build-desktop"
 version = "0.9.8"
 dependencies = [
+ "base64 0.22.1",
  "rusqlite",
  "serde",
  "serde_json",
