@@ -234,6 +234,12 @@ export function isFiniteNumber(value: number | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+const STARTERS = [
+  "Explain how this codebase is structured",
+  "Find and fix a bug",
+  "Add tests for a file I point you to",
+] as const;
+
 export function folderName(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean);
   return parts[parts.length - 1] ?? path;
@@ -2183,6 +2189,21 @@ export default function App() {
                           what you want done, in plain English.
                         </p>
                         <p className="eg">e.g. “add a README explaining what this project does”</p>
+                        <div className="starter-chips">
+                          {STARTERS.map((starter) => (
+                            <button
+                              type="button"
+                              className="starter-chip"
+                              key={starter}
+                              onClick={() => {
+                                updateActiveTab((tab) => ({ ...tab, draft: starter }));
+                                requestAnimationFrame(() => textareaRef.current?.focus());
+                              }}
+                            >
+                              {starter}
+                            </button>
+                          ))}
+                        </div>
                         {/* Be straight about this: Grok's agent mode applies edits itself. */}
                         <p className="eg warn">
                           Grok can change files here on its own. Use a folder you can undo — ideally one in git.
@@ -2549,22 +2570,36 @@ function TranscriptItems({
 }
 
 function UsageLine({ item }: { item: UsageItem }) {
-  const breakdown = [
-    isFiniteNumber(item.inputTokens) ? `${item.inputTokens.toLocaleString()} in` : null,
-    isFiniteNumber(item.outputTokens) ? `${item.outputTokens.toLocaleString()} out` : null,
-    isFiniteNumber(item.reasoningTokens) ? `${item.reasoningTokens.toLocaleString()} reasoning` : null,
-    isFiniteNumber(item.cachedReadTokens) ? `${item.cachedReadTokens.toLocaleString()} cached` : null,
-  ].filter((part): part is string => part !== null);
-  const tokenSummary = isFiniteNumber(item.totalTokens)
-    ? `${item.totalTokens.toLocaleString()} tokens${breakdown.length ? ` (${breakdown.join(" · ")})` : ""}`
-    : breakdown.join(" · ");
-  const parts = [
-    item.modelId,
-    tokenSummary,
-    isFiniteNumber(item.apiDurationMs) ? `${(item.apiDurationMs / 1000).toFixed(1)}s` : null,
-  ].filter((part): part is string => Boolean(part));
+  const durationSec = isFiniteNumber(item.apiDurationMs) && item.apiDurationMs > 0
+    ? (item.apiDurationMs / 1000).toFixed(1)
+    : null;
+  const tokens = isFiniteNumber(item.totalTokens) && item.totalTokens > 0 ? item.totalTokens : 0;
 
-  return <div className="usage">{parts.join(" · ")}</div>;
+  return (
+    <div className="turn-receipt">
+      <span className="turn-receipt-done">Done</span>
+      {durationSec !== null && (
+        <>
+          <span className="turn-receipt-sep" />
+          <span className="turn-receipt-stat">
+            <span className="turn-receipt-stat-val">{durationSec}</span>s
+          </span>
+        </>
+      )}
+      {tokens > 0 && (
+        <>
+          <span className="turn-receipt-sep" />
+          <span className="turn-receipt-stat">
+            <span className="turn-receipt-stat-val">{formatTokens(tokens)}</span> tokens
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function formatTokens(tokens: number): string {
+  return tokens >= 1_000 ? `${(tokens / 1_000).toFixed(1).replace(/\.0$/, "")}k` : String(tokens);
 }
 
 /// The gate. Our PreToolUse hook holds Grok's tool call open until the user

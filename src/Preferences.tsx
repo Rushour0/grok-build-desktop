@@ -136,14 +136,26 @@ export function Preferences({
 
         <div className="prefs-section">
           <div className="prefs-section-title">About</div>
-          <div className="prefs-row">
-            <span>CLI path: {cliPath ?? "unknown"}</span>
-          </div>
-          <div className="prefs-row">
-            <span>Version: {cliVersion ?? "unknown"}</span>
-          </div>
-          <div className="prefs-row">
-            <span>Signed in: {hasLogin ? "yes" : "no"}</span>
+          <div className="prefs-card">
+            <div className="prefs-card-row">
+              <span className="prefs-card-key">CLI path</span>
+              <span className="prefs-card-val">{cliPath ?? "unknown"}</span>
+            </div>
+            <div className="prefs-card-row">
+              <span className="prefs-card-key">Version</span>
+              <span className="prefs-card-val">{cliVersion ?? "unknown"}</span>
+            </div>
+            <div className="prefs-card-row">
+              <span className="prefs-card-key">Status</span>
+              {hasLogin ? (
+                <span className="prefs-status">
+                  <span className="prefs-status-dot" />
+                  Signed in
+                </span>
+              ) : (
+                <span className="prefs-card-val">Not signed in</span>
+              )}
+            </div>
           </div>
         </div>
 

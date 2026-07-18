@@ -76,13 +76,29 @@ export function TasksPanel({ open, onClose, tasks }: TasksPanelProps): React.Rea
           <span>Tasks</span>
         </div>
 
-        <div className="prefs-section">
-          <div className="prefs-section-title">Background work</div>
-          {sorted.length === 0 ? (
-            <div className="prefs-row">
-              <span className="prefs-hint">No background tasks yet.</span>
-            </div>
-          ) : (
+        {sorted.length === 0 ? (
+          <div className="overlay-empty">
+            <span className="overlay-empty-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 12h4l2 5 4-12 2 7h6" />
+              </svg>
+            </span>
+            <p className="overlay-empty-title">No background work</p>
+            <p className="overlay-empty-hint">
+              Subagents and scheduled tasks show up here while Grok runs them — with live status and
+              elapsed time.
+            </p>
+          </div>
+        ) : (
+          <div className="prefs-section">
+            <div className="prefs-section-title">Background work</div>
             <div className="tasks-list">
               {sorted.map((task) => (
                 <div className="tasks-row" key={task.id}>
@@ -100,8 +116,8 @@ export function TasksPanel({ open, onClose, tasks }: TasksPanelProps): React.Rea
                 </div>
               ))}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );
