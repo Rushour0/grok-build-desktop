@@ -55,6 +55,7 @@ import { normalizeRewindPoints, type RewindMode } from "./lib/rewind";
 import { TasksPanel } from "./TasksPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
 import { DocViewerPanel } from "./DocViewerPanel";
+import { EffortPicker } from "./EffortPicker";
 import { FirstRunStepper } from "./FirstRunStepper";
 import { firstRunSteps } from "./lib/firstRun";
 import { CatPet } from "./CatPet";
@@ -2270,6 +2271,20 @@ export default function App() {
                       submit();
                     }}
                   >
+                    {/* Reasoning-effort dropdown above the input — the biggest token
+                        lever, one click away. Only when Grok has advertised it. */}
+                    {activeTab.sessionInfo?.model?.supportsReasoningEffort &&
+                      effortCommandAvailable &&
+                      (activeTab.sessionInfo.model.reasoningEfforts?.length ?? 0) > 0 && (
+                        <div className="composer-toolbar">
+                          <EffortPicker
+                            efforts={activeTab.sessionInfo.model.reasoningEfforts ?? []}
+                            current={activeTab.sessionInfo.model.reasoningEffort}
+                            disabled={activeTab.busy}
+                            onPick={(level) => onSetEffort?.(level)}
+                          />
+                        </div>
+                      )}
                     {activeTab.attachments.length > 0 && (
                       <div className="attachments" aria-label="Attached files">
                         {activeTab.attachments.map((attachment) => (
