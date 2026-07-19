@@ -1,6 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import { clampPage, clampZoom, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP, zoomIn, zoomOut } from "./pageState";
+import { clampPage, clampZoom, scaledSize, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP, zoomIn, zoomOut } from "./pageState";
+
+describe("scaledSize", () => {
+  it("scales and rounds to whole pixels", () => {
+    expect(scaledSize(100, 50, 1)).toEqual({ width: 100, height: 50 });
+    expect(scaledSize(100, 50, 2)).toEqual({ width: 200, height: 100 });
+    expect(scaledSize(101, 51, 0.5)).toEqual({ width: 51, height: 26 }); // 50.5→51, 25.5→26
+  });
+
+  it("never returns a zero, negative, or non-finite dimension", () => {
+    expect(scaledSize(0, 0, 1)).toEqual({ width: 1, height: 1 });
+    expect(scaledSize(10, 10, 0)).toEqual({ width: 1, height: 1 });
+    expect(scaledSize(10, 10, Number.NaN)).toEqual({ width: 1, height: 1 });
+    expect(scaledSize(Number.POSITIVE_INFINITY, 10, 1)).toEqual({ width: 1, height: 10 });
+  });
+});
 
 describe("clampPage", () => {
   it("clamps pages below and above the valid range", () => {

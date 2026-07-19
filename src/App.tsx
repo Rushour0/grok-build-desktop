@@ -56,6 +56,7 @@ import { TasksPanel } from "./TasksPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
 import { DocViewerPanel } from "./DocViewerPanel";
 import { EffortPicker } from "./EffortPicker";
+import { effortPickerModel } from "./lib/effort";
 import { FirstRunStepper } from "./FirstRunStepper";
 import { firstRunSteps } from "./lib/firstRun";
 import { CatPet } from "./CatPet";
@@ -1839,6 +1840,9 @@ export default function App() {
     },
     [activeTab],
   );
+  // Whether the composer shows the effort dropdown, and with which levels — pure
+  // logic in lib/effort.ts so the rule is unit-tested rather than living in JSX.
+  const effortModel = effortPickerModel(activeTab?.sessionInfo, effortCommandAvailable);
   // Read-only mirror of the palette actions, title+hint only — Preferences'
   // Keyboard section lists shortcuts, it never triggers them.
   const prefsShortcuts = useMemo(
@@ -2272,19 +2276,17 @@ export default function App() {
                     }}
                   >
                     {/* Reasoning-effort dropdown above the input — the biggest token
-                        lever, one click away. Only when Grok has advertised it. */}
-                    {activeTab.sessionInfo?.model?.supportsReasoningEffort &&
-                      effortCommandAvailable &&
-                      (activeTab.sessionInfo.model.reasoningEfforts?.length ?? 0) > 0 && (
-                        <div className="composer-toolbar">
-                          <EffortPicker
-                            efforts={activeTab.sessionInfo.model.reasoningEfforts ?? []}
-                            current={activeTab.sessionInfo.model.reasoningEffort}
-                            disabled={activeTab.busy}
-                            onPick={(level) => onSetEffort?.(level)}
-                          />
-                        </div>
-                      )}
+                        lever, one click away. Visibility + levels via effortPickerModel. */}
+                    {effortModel.visible && (
+                      <div className="composer-toolbar">
+                        <EffortPicker
+                          efforts={effortModel.efforts}
+                          current={effortModel.current}
+                          disabled={activeTab.busy}
+                          onPick={(level) => onSetEffort?.(level)}
+                        />
+                      </div>
+                    )}
                     {activeTab.attachments.length > 0 && (
                       <div className="attachments" aria-label="Attached files">
                         {activeTab.attachments.map((attachment) => (

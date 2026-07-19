@@ -7,7 +7,7 @@
 /// (acceptable for a v1 preview). SVG is routed to "unsupported" upstream.
 import { useEffect, useRef, useState } from "react";
 
-import { clampZoom, zoomIn, zoomOut, ZOOM_MAX, ZOOM_MIN } from "./lib/docViewer/pageState";
+import { clampZoom, scaledSize, zoomIn, zoomOut, ZOOM_MAX, ZOOM_MIN } from "./lib/docViewer/pageState";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -78,8 +78,7 @@ export function ImageRenderer({ data }: { data: Uint8Array }): React.ReactElemen
     const bitmap = bitmapRef.current;
     const canvas = canvasRef.current;
     if (!bitmap || !canvas || !dims) return;
-    const width = Math.max(1, Math.round(dims.width * scale));
-    const height = Math.max(1, Math.round(dims.height * scale));
+    const { width, height } = scaledSize(dims.width, dims.height, scale);
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
