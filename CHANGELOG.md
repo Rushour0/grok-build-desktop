@@ -7,6 +7,14 @@ to tagged GitHub releases.
 v0.9.7 was the final version on the original feature roadmap. v0.9.8 begins a UX-craft
 pass: making what already shipped feel intentional, and fixing the transcript.
 
+## [v0.9.11]
+
+### Fixed
+
+- **Reasoning-effort dropdown now appears.** It was gated on model capability fields
+  the CLI doesn't actually report, so it never showed. It now appears above the composer
+  in any live session, with `low` / `medium` / `high` levels.
+
 ## [v0.9.10]
 
 ### Added
