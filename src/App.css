@@ -1381,7 +1381,7 @@ button.tab-close:hover {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  max-width: 72ch;
+  max-width: var(--lane);
   width: 100%;
   box-shadow: var(--shadow-1);
 }
@@ -1444,7 +1444,10 @@ button.tab-close:hover {
 }
 
 .bubble {
-  max-width: 100%;
+  /* Lane-capped so direct-child bubbles (thought / error) ride the same centred column as
+     everything else. Wrapped bubbles (answer / you) are re-capped by `.bubble-wrap > .bubble`
+     below, so this only governs the un-wrapped kinds. */
+  max-width: var(--lane);
   padding: 0.6rem 0.85rem;
   border-radius: var(--radius-lg);
   word-break: break-word;
@@ -1789,8 +1792,8 @@ button.tab-close:hover {
   padding: 0.35rem 0.6rem;
   border: 1px solid var(--line);
   border-radius: 8px;
-  width: fit-content;
-  max-width: 72ch;
+  width: 100%;
+  max-width: var(--lane);
   background: var(--sheen), var(--panel);
   box-shadow: var(--shadow-1);
 }
