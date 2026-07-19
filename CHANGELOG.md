@@ -7,10 +7,11 @@ to tagged GitHub releases.
 v0.9.7 was the final version on the original feature roadmap. v0.9.8 begins a UX-craft
 pass: making what already shipped feel intentional, and fixing the transcript.
 
-## [v0.10.0]
+## [v0.10.1]
 
 A flat, minimal redesign toward a coder-first IDE feel (Codex / Zed / Linear), plus the
-controls a daily agent session needs.
+controls a daily agent session needs. (First published cut of the redesign; v0.10.0 was
+tagged internally but never released.)
 
 ### Changed
 
