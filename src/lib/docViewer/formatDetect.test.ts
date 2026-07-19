@@ -30,4 +30,19 @@ describe("detectDocFormat", () => {
     expect(detectDocFormat("report.pdf?download=1")).toBe("pdf");
     expect(detectDocFormat("")).toBe("unsupported");
   });
+
+  it("detects raster image extensions", () => {
+    for (const ext of ["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "ico"]) {
+      expect(detectDocFormat(`shot.${ext}`)).toBe("image");
+    }
+  });
+
+  it("detects image extensions case-insensitively and with suffixes", () => {
+    expect(detectDocFormat("Diagram.PNG")).toBe("image");
+    expect(detectDocFormat("/assets/icon.WEBP?v=2")).toBe("image");
+  });
+
+  it("treats svg as unsupported (createImageBitmap is unreliable for it)", () => {
+    expect(detectDocFormat("logo.svg")).toBe("unsupported");
+  });
 });
