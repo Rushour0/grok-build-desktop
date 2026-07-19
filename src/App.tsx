@@ -1842,7 +1842,12 @@ export default function App() {
   );
   // Whether the composer shows the effort dropdown, and with which levels — pure
   // logic in lib/effort.ts so the rule is unit-tested rather than living in JSX.
-  const effortModel = effortPickerModel(activeTab?.sessionInfo, effortCommandAvailable);
+  // Shown for any live session (a session id): the real grok-build model doesn't
+  // report supportsReasoningEffort, so gating on that hid the picker entirely.
+  const effortModel = effortPickerModel(
+    activeTab?.sessionInfo,
+    Boolean(activeTab?.sessionId),
+  );
   // Read-only mirror of the palette actions, title+hint only — Preferences'
   // Keyboard section lists shortcuts, it never triggers them.
   const prefsShortcuts = useMemo(
