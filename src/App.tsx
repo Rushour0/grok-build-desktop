@@ -55,6 +55,7 @@ import { normalizeRewindPoints, type RewindMode } from "./lib/rewind";
 import { TasksPanel } from "./TasksPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
 import { DocViewerPanel } from "./DocViewerPanel";
+import { detectDocFormat } from "./lib/docViewer/formatDetect";
 import { EffortPicker } from "./EffortPicker";
 import { effortPickerModel } from "./lib/effort";
 import { FirstRunStepper } from "./FirstRunStepper";
@@ -260,6 +261,24 @@ export function toMention(cwd: string | null, absPath: string): string {
 
 export function isImagePath(path: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(path);
+}
+
+/// The most recent visual asset a *live* turn produced that the side viewer can open
+/// (image / pdf / docx), found among tool locations. Only tools with `endedAt` count —
+/// that field is set solely on the live path, never on `session/load` replay, so opening
+/// an old conversation never auto-pops the viewer for a historical file. Scans newest-first
+/// so the last file the turn touched wins. Returns null when the turn produced nothing
+/// viewable.
+export function latestViewableAssetPath(items: Item[]): string | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (!isTool(item) || !item.endedAt || !item.locations) continue;
+    for (let j = item.locations.length - 1; j >= 0; j--) {
+      const fmt = detectDocFormat(item.locations[j].path);
+      if (fmt === "image" || fmt === "pdf" || fmt === "docx") return item.locations[j].path;
+    }
+  }
+  return null;
 }
 
 export function reduceUpdates(updates: SessionUpdate[]): Item[] {
@@ -562,6 +581,9 @@ export default function App() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // Whether the reader is parked at the live tail. Auto-follow only happens when this is
+  // true, so reading earlier output while Grok keeps streaming isn't yanked to the bottom.
+  const [atBottom, setAtBottom] = useState(true);
   // `session/load` replays before its response. Keep those normal ACP updates
   // together, then render the whole replay through the history reducer.
   const sessionReplays = useRef<Map<string, SessionUpdate[]>>(new Map());
@@ -572,6 +594,10 @@ export default function App() {
   // The 400ms line gate and the 3s Cancel gate, per tab.
   const connectTimers = useRef<Map<string, number[]>>(new Map());
   const tabsRef = useRef(tabs);
+  const activeTabIdRef = useRef(activeTabId);
+  // Assets already auto-opened in the side viewer, so a produced file opens once — not again
+  // on every later turn in the same session.
+  const autoOpenedAssetsRef = useRef<Set<string>>(new Set());
   const addRunRef = useRef<() => Promise<void>>(async () => {});
   // Chunks stream in one fragment at a time; keep appending to the same bubble
   // until something else happens rather than making a bubble per fragment.
@@ -580,6 +606,7 @@ export default function App() {
   const planIds = useRef<Map<string, string | null>>(new Map());
 
   tabsRef.current = tabs;
+  activeTabIdRef.current = activeTabId;
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
 
   const updateTab = useCallback((tabId: string, updateTabState: (tab: Tab) => Tab) => {
@@ -687,9 +714,43 @@ export default function App() {
     return () => mql.removeEventListener("change", onChange);
   }, [theme]);
 
+  // Track whether the stream is scrolled to (near) its tail. A small threshold means a
+  // stray pixel or the streaming caret's growth doesn't count as "scrolled away".
   useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120);
+    };
+    onScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [activeTabId]);
+
+  // Follow the live tail as content streams in — but only when the reader is already
+  // there. Scrolled up to read something? Position is left alone and "Jump to latest"
+  // appears instead (see the button in the stream).
+  useEffect(() => {
+    if (!atBottom) return;
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [activeTab?.items, activeTab?.busy]);
+  }, [activeTab?.items, activeTab?.busy, atBottom]);
+
+  // Snapping back to a new tab should start at its tail, regardless of where the last
+  // one was left — a switch is a fresh read, not a resumed scroll position.
+  useEffect(() => {
+    setAtBottom(true);
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [activeTabId]);
+
+  // Grow the composer with its content, from one line up to the CSS cap (then it scrolls).
+  // Keyed on the draft so it tracks typing, paste, and programmatic fills (starters, edit).
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [activeTab?.draft, activeTabId]);
 
   useEffect(() => {
     try {
@@ -933,6 +994,13 @@ export default function App() {
       if (event.key === ",") {
         event.preventDefault();
         setPrefsOpen(true);
+        return;
+      }
+      // Cmd/Ctrl+. stops the running turn — the composer's Stop button as a shortcut.
+      // Cancel is a no-op when nothing is running, so this is safe to fire unconditionally.
+      if (event.key === ".") {
+        event.preventDefault();
+        if (activeTabId) void cancelRun(activeTabId).catch(() => {});
         return;
       }
       if (event.key !== "w" && event.key !== "W") return;
@@ -1224,6 +1292,17 @@ export default function App() {
           items: usageItem ? [...tab.items, usageItem] : tab.items,
           usageTokens: tab.usageTokens + (isFiniteNumber(meta?.totalTokens) ? meta.totalTokens : 0),
         }));
+        // Auto-open a freshly produced visual asset (image / pdf / docx) in the side viewer.
+        // Only for the active tab (a background tab's turn shouldn't hijack the viewer), only
+        // for live-produced assets (see `latestViewableAssetPath`), and only once per asset.
+        if (tabId === activeTabIdRef.current) {
+          const finishedTab = tabsRef.current.find((tab) => tab.id === tabId);
+          const asset = finishedTab ? latestViewableAssetPath(finishedTab.items) : null;
+          if (finishedTab && asset && !autoOpenedAssetsRef.current.has(asset)) {
+            autoOpenedAssetsRef.current.add(asset);
+            setDocViewer({ path: asset, cwd: finishedTab.cwd });
+          }
+        }
         openBubbles.current.set(tabId, {});
         planIds.current.set(tabId, null); // next turn starts a fresh plan
         setHistoryRevision((revision) => revision + 1);
@@ -2003,7 +2082,8 @@ export default function App() {
             {/* No project, no "New chat": there's no folder for it to be in yet.
                 "Open folder…" is the one thing a launcher can do. */}
             {projectCwd && (
-              <button className="new-chat primary" onClick={() => addRun()}>
+              <button className="new-chat" onClick={() => addRun()}>
+                <span className="new-chat-plus" aria-hidden="true">+</span>
                 New chat
               </button>
             )}
@@ -2106,7 +2186,7 @@ export default function App() {
             <div className="drop-overlay">Drop files to attach</div>
           )}
           {!projectCwd ? (
-            <div className="content-empty">
+            <div className="content-empty launcher">
               <h1>Open a folder to start</h1>
               <p>Each project gets its own window. Pick one, or open a conversation on the left.</p>
               <button className="primary" onClick={() => pickProject()} disabled={openingProject}>
@@ -2128,6 +2208,7 @@ export default function App() {
             </div>
           ) : tabs.length > 0 ? (
             <>
+              <div className="topbar">
               <nav className="tab-strip" aria-label="Chat tabs">
                 {tabs.map((tab) => (
                   <div className={`chat-tab${tab.id === activeTabId ? " active" : ""}`} key={tab.id}>
@@ -2158,6 +2239,21 @@ export default function App() {
                   +
                 </button>
               </nav>
+              {/* Project identity folded into the tab row — one band instead of a separate
+                  project bar below it. Full path lives in the tooltip. */}
+              {activeTab && !activeTab.needsAuth && (
+                <div className="topbar-meta">
+                  <span className="folder" title={activeTab.cwd}>
+                    <span className="dot" />
+                    <strong>{folderName(activeTab.cwd)}</strong>
+                  </span>
+                  {activeTab.usageTokens > 0 && (
+                    <span className="usage-total">{activeTab.usageTokens.toLocaleString()} tok</span>
+                  )}
+                  <CatPet />
+                </div>
+              )}
+              </div>
 
               {/* Window-level failures — an "Open folder…" that Rust refused. A
                   tab's own error renders on the tab; this one belongs to no tab,
@@ -2192,23 +2288,8 @@ export default function App() {
                 </div>
               ) : activeTab ? (
                 <>
-                  <header className="bar">
-                    {/* The full path is the answer to "does it actually know where it's working?" */}
-                    <div className="folder" title={activeTab.cwd}>
-                      <span className="dot" />
-                      <strong>{folderName(activeTab.cwd)}</strong>
-                      <span className="path">{activeTab.cwd}</span>
-                    </div>
-                    <div className="bar-actions">
-                      {activeTab.usageTokens > 0 && (
-                        <span className="usage-total">· {activeTab.usageTokens.toLocaleString()} tokens</span>
-                      )}
-                      {/* The cat lives where a redundant "Close tab" button used to be —
-                          every tab already has its own × in the strip above. */}
-                      <CatPet />
-                    </div>
-                  </header>
-
+                  {/* Project identity now lives in the merged topbar above (.topbar-meta),
+                      so there's no separate project band here — straight to the transcript. */}
                   <div className="stream" ref={scrollRef}>
                     {activeTab.items.length === 0 && (
                       <div className="empty">
@@ -2271,6 +2352,23 @@ export default function App() {
                           : undefined
                       }
                     />
+                    {/* Only while parked away from the tail — auto-follow is paused, so
+                        offer the way back. Clicking re-arms follow by snapping to bottom. */}
+                    {!atBottom && activeTab.items.length > 0 && (
+                      <button
+                        type="button"
+                        className="jump-latest"
+                        onClick={() => {
+                          setAtBottom(true);
+                          scrollRef.current?.scrollTo({
+                            top: scrollRef.current.scrollHeight,
+                            behavior: "smooth",
+                          });
+                        }}
+                      >
+                        ↓ Jump to latest
+                      </button>
+                    )}
                   </div>
 
                   <form
@@ -2280,18 +2378,7 @@ export default function App() {
                       submit();
                     }}
                   >
-                    {/* Reasoning-effort dropdown above the input — the biggest token
-                        lever, one click away. Visibility + levels via effortPickerModel. */}
-                    {effortModel.visible && (
-                      <div className="composer-toolbar">
-                        <EffortPicker
-                          efforts={effortModel.efforts}
-                          current={effortModel.current}
-                          disabled={activeTab.busy}
-                          onPick={(level) => onSetEffort?.(level)}
-                        />
-                      </div>
-                    )}
+                   <div className="composer-inner">
                     {activeTab.attachments.length > 0 && (
                       <div className="attachments" aria-label="Attached files">
                         {activeTab.attachments.map((attachment) => (
@@ -2367,15 +2454,46 @@ export default function App() {
                       placeholder="What should Grok do?"
                       rows={1}
                     />
-                    <button
-                      type="submit"
-                      className="primary"
-                      disabled={
-                        activeTab.busy || (!activeTab.draft.trim() && activeTab.attachments.length === 0)
-                      }
-                    >
-                      {activeTab.busy ? "Working…" : "Send"}
-                    </button>
+                    {activeTab.busy ? (
+                      // A running turn's one escape hatch, where the hand already is.
+                      // Also on Cmd/Ctrl+. — see the global keyboard handler.
+                      <button
+                        type="button"
+                        className="composer-stop"
+                        onClick={() => void cancelRun(activeTab.id).catch(() => {})}
+                        title="Stop this turn (⌘.)"
+                      >
+                        Stop
+                      </button>
+                    ) : (
+                      <button
+                        type="submit"
+                        className="primary"
+                        disabled={!activeTab.draft.trim() && activeTab.attachments.length === 0}
+                      >
+                        Send
+                      </button>
+                    )}
+                    {/* Metadata row BELOW the input — effort + current model as low-emphasis
+                        composer controls, not a prominent toolbar stealing a row up top. */}
+                    {effortModel.visible && (
+                      <div className="composer-toolbar">
+                        <EffortPicker
+                          efforts={effortModel.efforts}
+                          current={effortModel.current}
+                          disabled={activeTab.busy}
+                          onPick={(level) => onSetEffort?.(level)}
+                        />
+                        <span
+                          className="model-label"
+                          title="The model this session is running. Grok currently offers a single model; a picker appears here if more than one becomes available."
+                        >
+                          <span className="model-cap">Model</span>
+                          <strong>{activeTab.sessionInfo?.model?.name ?? "Grok Build"}</strong>
+                        </span>
+                      </div>
+                    )}
+                   </div>
                   </form>
                 </>
               ) : null}

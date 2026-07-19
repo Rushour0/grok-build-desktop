@@ -1,10 +1,12 @@
 :root {
   --bg: #ffffff;
-  --panel: #f7f7f8;
-  --line: #e4e4e7;
-  --ink: #18181b;
-  --ink-soft: #71717a;
-  --accent: #18181b;
+  --panel: #f6f6f5;
+  --panel-2: #ececea;
+  --line: #dfdfdc;
+  --ink: #1b1b19;
+  --ink-soft: #70706c;
+  /* One restrained accent — used only for the primary action, focus ring, and links. */
+  --accent: #2563eb;
   --accent-ink: #ffffff;
   --danger: #b42318;
   --ok: #067647;
@@ -14,35 +16,41 @@
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
 
-  /* Motion — quick and physical. `--ease-out` carries a hair of overshoot so a card
-     settling reads as landing, not arriving. Every animation below spends only these. */
+  /* The one shared reading lane. Transcript turns, the header, and the composer all
+     center to it, so a wide window reads as a single column instead of content flung
+     to both edges (the "lanky" sprawl). `--lane-wide` is the exception a side-by-side
+     diff / approval card earns. */
+  --lane: 54rem;
+  --lane-wide: 60rem;
+
+  /* Motion — quick and restrained. */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --dur-fast: 120ms;
   --dur: 200ms;
   --dur-slow: 340ms;
 
-  /* Depth — the redesign's one real departure from flat, and it stays monochrome: elevation
-     is carried by layered shadow and a rim of light, never by hue. Three tiers, each a
-     stacked soft/tight pair plus a top rim-highlight so a raised surface catches light on
-     its upper edge — that highlight is what reads as physical rather than just shaded. */
-  --rim: inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  --shadow-1: var(--rim), 0 1px 2px rgba(24, 24, 27, 0.06), 0 2px 6px rgba(24, 24, 27, 0.07);
-  --shadow-2: var(--rim), 0 2px 6px rgba(24, 24, 27, 0.08), 0 10px 24px rgba(24, 24, 27, 0.12);
-  --shadow-3: var(--rim), 0 6px 14px rgba(24, 24, 27, 0.1), 0 22px 48px rgba(24, 24, 27, 0.18);
-  /* A near-invisible top-to-bottom sheen laid over a surface's own colour, so panels read as
-     lit from above instead of flat fills. */
-  --sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0));
-  --sheen-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(0, 0, 0, 0.04));
-  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  /* Flat by default (Codex/Zed/Linear): elevation is a 1px hairline border, never a
+     gradient or a stack of shadows. Real shadows exist only for surfaces that float over
+     content — menus and modals (--shadow-2/3). rim/sheen/inset are kept as no-ops so the
+     existing `var(--sheen), var(--panel)` and `box-shadow: var(--rim)` call sites resolve
+     to flat surfaces without editing every one. */
+  --shadow-1: none;
+  --shadow-2: 0 4px 16px rgba(24, 24, 27, 0.12);
+  --shadow-3: 0 16px 48px rgba(24, 24, 27, 0.18);
+  --rim: 0 0 transparent;
+  --sheen: linear-gradient(0deg, transparent, transparent);
+  --sheen-strong: linear-gradient(0deg, transparent, transparent);
+  --shadow-inset: 0 0 transparent;
 
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, monospace;
   font-family: ui-sans-serif, -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
-  font-size: 15px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.5;
   color: var(--ink);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -51,25 +59,20 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0c0c0d;
-    --panel: #161618;
-    --line: #26262a;
-    --ink: #f4f4f5;
-    --ink-soft: #a1a1aa;
-    --accent: #f4f4f5;
-    --accent-ink: #0c0c0d;
+    --panel: #171716;
+    --panel-2: #21211f;
+    --line: #30302d;
+    --ink: #f5f5f1;
+    --ink-soft: #aaa9a2;
+    --accent: #3b82f6;
+    --accent-ink: #ffffff;
     --danger: #ff6b6b;
     --ok: #4ade80;
 
-    /* Deeper on dark: a soft black spread reads as elevation where a light shadow would
-       vanish, and the rim highlight drops to a hairline — on dark, depth is carried more by
-       the rim of light on the top edge than by the shadow beneath. */
-    --rim: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-    --shadow-1: var(--rim), 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.4);
-    --shadow-2: var(--rim), 0 4px 12px rgba(0, 0, 0, 0.55), 0 12px 30px rgba(0, 0, 0, 0.5);
-    --shadow-3: var(--rim), 0 8px 20px rgba(0, 0, 0, 0.6), 0 26px 54px rgba(0, 0, 0, 0.6);
-    --sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0));
-    --sheen-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(0, 0, 0, 0.12));
-    --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    /* Only the float-over-content shadows change on dark; everything else inherits the
+       flat no-ops from :root. */
+    --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.5);
+    --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.62);
   }
 }
 
@@ -80,42 +83,44 @@
    documentElement.dataset.theme) repaints identically regardless of the OS setting. ---- */
 :root[data-theme="light"] {
   --bg: #ffffff;
-  --panel: #f7f7f8;
-  --line: #e4e4e7;
-  --ink: #18181b;
-  --ink-soft: #71717a;
-  --accent: #18181b;
+  --panel: #f6f6f5;
+  --panel-2: #ececea;
+  --line: #dfdfdc;
+  --ink: #1b1b19;
+  --ink-soft: #70706c;
+  --accent: #2563eb;
   --accent-ink: #ffffff;
   --danger: #b42318;
   --ok: #067647;
 
-  --rim: inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  --shadow-1: var(--rim), 0 1px 2px rgba(24, 24, 27, 0.06), 0 2px 6px rgba(24, 24, 27, 0.07);
-  --shadow-2: var(--rim), 0 2px 6px rgba(24, 24, 27, 0.08), 0 10px 24px rgba(24, 24, 27, 0.12);
-  --shadow-3: var(--rim), 0 6px 14px rgba(24, 24, 27, 0.1), 0 22px 48px rgba(24, 24, 27, 0.18);
-  --sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0));
-  --sheen-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(0, 0, 0, 0.04));
-  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --shadow-1: none;
+  --shadow-2: 0 4px 16px rgba(24, 24, 27, 0.12);
+  --shadow-3: 0 16px 48px rgba(24, 24, 27, 0.18);
+  --rim: 0 0 transparent;
+  --sheen: linear-gradient(0deg, transparent, transparent);
+  --sheen-strong: linear-gradient(0deg, transparent, transparent);
+  --shadow-inset: 0 0 transparent;
 }
 
 :root[data-theme="dark"] {
   --bg: #0c0c0d;
-  --panel: #161618;
-  --line: #26262a;
-  --ink: #f4f4f5;
-  --ink-soft: #a1a1aa;
-  --accent: #f4f4f5;
-  --accent-ink: #0c0c0d;
+  --panel: #171716;
+  --panel-2: #21211f;
+  --line: #30302d;
+  --ink: #f5f5f1;
+  --ink-soft: #aaa9a2;
+  --accent: #3b82f6;
+  --accent-ink: #ffffff;
   --danger: #ff6b6b;
   --ok: #4ade80;
 
-  --rim: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  --shadow-1: var(--rim), 0 1px 2px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.4);
-  --shadow-2: var(--rim), 0 4px 12px rgba(0, 0, 0, 0.55), 0 12px 30px rgba(0, 0, 0, 0.5);
-  --shadow-3: var(--rim), 0 8px 20px rgba(0, 0, 0, 0.6), 0 26px 54px rgba(0, 0, 0, 0.6);
-  --sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0));
-  --sheen-strong: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(0, 0, 0, 0.12));
-  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-1: none;
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.62);
+  --rim: 0 0 transparent;
+  --sheen: linear-gradient(0deg, transparent, transparent);
+  --sheen-strong: linear-gradient(0deg, transparent, transparent);
+  --shadow-inset: 0 0 transparent;
 }
 
 * {
@@ -130,9 +135,9 @@ body {
 button {
   font: inherit;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--line);
-  padding: 0.55em 1.1em;
+  padding: 0.5em 0.95em;
   background: transparent;
   color: var(--ink);
   transition: opacity var(--dur-fast) var(--ease-standard),
@@ -150,22 +155,27 @@ button:disabled {
   cursor: default;
 }
 button.primary {
-  /* A top-lit pill: the sheen gradient over the flat accent gives it a curved, physical
-     face, the rim in --shadow-2 catches light on the top edge, and the drop shadow sits it
-     above the surface. This is the 3D the buttons are carrying. */
-  background: var(--sheen-strong), var(--accent);
+  /* Flat accent fill — the one place hue appears. No sheen, no drop shadow: it reads as
+     the primary action because it's the only filled control, not because it's raised. */
+  background: var(--accent);
   color: var(--accent-ink);
   border-color: var(--accent);
   font-weight: 500;
-  box-shadow: var(--shadow-2);
+  box-shadow: none;
 }
 button.primary:hover:not(:disabled) {
-  transform: translateY(-1.5px);
-  box-shadow: var(--shadow-3);
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+  border-color: color-mix(in srgb, var(--accent) 88%, #000);
 }
 button.primary:active:not(:disabled) {
-  transform: translateY(0) scale(0.985);
-  box-shadow: var(--shadow-1);
+  transform: translateY(1px) scale(0.99);
+}
+/* Disabled primary reads as neutral zinc, never a muddy half-opacity blue that looks broken. */
+button.primary:disabled {
+  background: var(--panel-2);
+  color: var(--ink-soft);
+  border-color: var(--line);
+  opacity: 1;
 }
 button.ghost {
   color: var(--ink-soft);
@@ -462,7 +472,7 @@ button.recent span {
   height: 34px;
   /* Clear the macOS traffic lights so the toggle doesn't sit under them. */
   padding-left: 78px;
-  background: var(--sheen), var(--panel);
+  background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
 /* The draggable part is only the empty remainder of the bar, so the toggle button stays a
@@ -519,23 +529,23 @@ button.recent span {
 /* ---- conversation sidebar ---- */
 
 .sidebar {
-  width: 260px;
+  width: 272px;
   min-height: 0;
   flex: none;
   display: flex;
   flex-direction: column;
-  padding: 0.75rem;
+  padding: 0.85rem 0.7rem 0.7rem;
   border-right: 1px solid var(--line);
   background: var(--panel);
   /* Recessed: the content pane reads as lifted above the sidebar because the sidebar's
      inner-right edge falls into shadow. Depth from layering, not just from card shadows. */
-  box-shadow: inset -10px 0 16px -14px rgba(0, 0, 0, 0.35);
+  box-shadow: none;
   /* Collapsing slides it left off the edge (clipped by `.shell-body`'s overflow) and lets
      the content pane grow into the space — a real hide, not just a width shrink. */
   transition: margin-left var(--dur-slow) var(--ease-out);
 }
 .sidebar.collapsed {
-  margin-left: -261px;
+  margin-left: -273px;
 }
 .sidebar-head {
   display: flex;
@@ -547,8 +557,10 @@ button.recent span {
   display: flex;
   align-items: center;
   gap: 0.55rem;
-  padding: 0 0.15rem;
-  font-size: 0.92rem;
+  padding: 0 0.35rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 .sidebar-brand .mark {
   width: 18px;
@@ -558,8 +570,30 @@ button.recent span {
   background: var(--sheen-strong), var(--accent);
   box-shadow: var(--shadow-1);
 }
+/* Demoted from the old full-width blue slab: a calm neutral button with a small blue "+".
+   The accent is spent on the primary send action, not on a permanent banner. */
 button.new-chat {
   width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.6em 0.9em;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--ink);
+  background: var(--panel-2);
+  border-color: var(--line);
+}
+button.new-chat:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 8%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--ink) 22%, var(--line));
+}
+.new-chat-plus {
+  color: var(--accent);
+  font-size: 1.05em;
+  font-weight: 600;
+  line-height: 1;
 }
 button.open-folder {
   width: 100%;
@@ -572,8 +606,8 @@ button.open-folder {
   width: 100%;
   margin-top: 0.75rem;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0.5rem 0.6rem;
+  border-radius: 7px;
+  padding: 0.56rem 0.65rem;
   font: inherit;
   font-size: 0.82rem;
   color: var(--ink);
@@ -603,14 +637,13 @@ button.side-row {
   flex: none;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.08rem;
+  gap: 0.12rem;
   padding: 0.5rem 0.65rem;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   text-align: left;
-  transition: background var(--dur-fast) var(--ease-standard),
-    transform var(--dur-fast) var(--ease-out);
+  transition: background var(--dur-fast) var(--ease-standard);
   animation: fade-up var(--dur) var(--ease-out) both;
 }
 /* Stagger only the rows above the fold — a delay on a row the eye can't see is a delay
@@ -656,8 +689,7 @@ button.side-row::before {
   transition: transform var(--dur) var(--ease-out);
 }
 button.side-row:hover {
-  background: var(--bg);
-  transform: translateX(3px);
+  background: var(--panel-2);
 }
 /* Hovering a row half-raises its accent bar — a hint of the state it would take if clicked.
    Not on the active row, whose bar is already fully up. */
@@ -666,10 +698,10 @@ button.side-row:not(.active):hover::before {
   background: var(--ink-soft);
 }
 button.side-row:active {
-  transform: translateX(3px) scale(0.996);
+  background: var(--panel-2);
 }
 button.side-row.active {
-  background: var(--bg);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel-2));
 }
 button.side-row.active::before {
   transform: scaleY(1);
@@ -742,7 +774,7 @@ button.side-row.active strong {
   background: var(--bg);
   /* The other half of the sidebar's recess: the content pane casts a soft shadow back onto
      the sidebar, so the two planes are unmistakably at different depths. */
-  box-shadow: -14px 0 30px -22px rgba(0, 0, 0, 0.4);
+  box-shadow: none;
 }
 .content > .stream {
   min-height: 0;
@@ -829,18 +861,62 @@ button.transcript-close:hover {
   margin: 0.3rem 0 1rem;
   color: var(--ink-soft);
 }
+/* The folder launcher rides one left-aligned column instead of a centered hero over a
+   left-aligned recent list — one reading axis, positioned high rather than dead-centre. */
+.content-empty.launcher {
+  align-items: flex-start;
+  justify-content: flex-start;
+  text-align: left;
+  width: 100%;
+  max-width: 42rem;
+  margin-inline: auto;
+  padding-top: 12vh;
+}
+.content-empty.launcher .recents {
+  width: 100%;
+}
 
 /* ---- live chat ---- */
 
-.tab-strip {
-  min-width: 0;
+/* The merged topbar: tabs on the left, project identity on the right — one band instead
+   of a tab row plus a separate project bar below it. */
+.topbar {
   display: flex;
   flex: none;
   align-items: stretch;
-  overflow-x: auto;
+  min-width: 0;
   border-bottom: 1px solid var(--line);
-  background: var(--bg);
+  background: var(--panel);
+}
+.tab-strip {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: stretch;
+  overflow-x: auto;
+  background: transparent;
   scrollbar-width: thin;
+}
+.topbar-meta {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 0.9rem;
+  min-width: 0;
+  max-width: 48%;
+}
+.topbar-meta .folder {
+  min-width: 0;
+  font-size: 0.8rem;
+}
+.topbar-meta .folder strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-meta .usage-total {
+  flex: none;
 }
 .chat-tab {
   position: relative;
@@ -874,7 +950,7 @@ button.transcript-close:hover {
 }
 .chat-tab.active {
   color: var(--ink);
-  background: var(--panel);
+  background: var(--bg);
   font-weight: 600;
 }
 .chat-tab.active::after {
@@ -935,14 +1011,23 @@ button.tab-close:hover {
 }
 
 .bar {
+  flex: none;
+  padding: 0.45rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--sheen), var(--panel);
+  box-shadow: none;
+}
+/* The bar spans the window (its border/sheen are the top edge of the chat), but its
+   contents ride the same centered lane the transcript below does, so the project name
+   sits directly above the conversation instead of pinned to the far left. */
+.bar-inner {
+  width: 100%;
+  max-width: var(--lane-wide);
+  margin-inline: auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.6rem 0.9rem;
-  border-bottom: 1px solid var(--line);
-  background: var(--sheen), var(--panel);
-  box-shadow: 0 6px 18px -14px rgba(0, 0, 0, 0.35);
 }
 .folder {
   min-width: 0;
@@ -968,7 +1053,6 @@ button.tab-close:hover {
   inset: 0;
   border-radius: 50%;
   background: var(--ok);
-  animation: ping 2.4s var(--ease-out) infinite;
   pointer-events: none;
 }
 @keyframes ping {
@@ -1011,13 +1095,49 @@ button.tab-close:hover {
      squeezed shorter instead of the list scrolling. */
   flex: 1 1 auto;
   min-height: 0;
-  padding: 1.25rem;
+  padding: 2rem 1.5rem 2.25rem;
+  /* Leave headroom so a programmatic scroll never tucks the top turn under the project bar. */
+  scroll-padding-block: 0.75rem;
   display: flex;
   flex-direction: column;
-  gap: 0.7rem;
-  /* A shallow scene: cards that lift on hover tip very slightly toward the viewer, which
-     only reads as depth because the stream gives their transforms a vanishing point. */
-  perspective: 1400px;
+  gap: 0.5rem;
+}
+/* The lane, applied uniformly: every turn — prose, tool card, plan, receipt — is capped
+   to `--lane` and centred by auto side-margins, so user and assistant read as one column
+   down the middle rather than a left/right zig-zag with a hollow centre. */
+.stream > * {
+  width: 100%;
+  max-width: var(--lane);
+  margin-inline: auto;
+}
+/* The approval / side-by-side diff card earns the wider lane — two columns need the room. */
+.stream > .ask {
+  max-width: min(100%, var(--lane-wide));
+}
+/* A floating "jump to latest" that appears only when the reader has scrolled up off the
+   live tail (so auto-follow has been paused). Sticks to the bottom of the scrollport and
+   sizes to its label rather than the lane. */
+.stream > .jump-latest {
+  position: sticky;
+  bottom: 0.25rem;
+  align-self: center;
+  width: max-content;
+  max-width: max-content;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  background: var(--sheen), var(--panel);
+  box-shadow: var(--shadow-2);
+  animation: scale-in var(--dur-fast) var(--ease-out);
+}
+.stream > .jump-latest:hover {
+  border-color: color-mix(in srgb, var(--ink) 30%, var(--line));
 }
 /* Each item rises in as it arrives. On the base class only: a streaming chunk mutates the
    same node (same key) rather than remounting it, so the entrance fires once and the text
@@ -1050,7 +1170,7 @@ button.tab-close:hover {
   margin: auto;
   text-align: center;
   color: var(--ink-soft);
-  max-width: 46ch;
+  max-width: 52ch;
   animation: fade-up var(--dur-slow) var(--ease-out);
 }
 .empty p {
@@ -1065,13 +1185,13 @@ button.tab-close:hover {
 
 .ask {
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   /* Wider than the 72ch prose measure: a side-by-side diff needs room for two columns, and
      the approval card is the one place that earns it. */
   max-width: min(100%, 60rem);
   width: 100%;
-  box-shadow: var(--shadow-2);
+  box-shadow: none;
 }
 /* The settled confirmation is just a line — it's answered, so it drops back to flat. */
 .ask.decided {
@@ -1259,7 +1379,7 @@ button.tab-close:hover {
 /* ---- plan timeline ---- */
 .plan {
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   max-width: 72ch;
   width: 100%;
@@ -1324,9 +1444,9 @@ button.tab-close:hover {
 }
 
 .bubble {
-  max-width: 72ch;
+  max-width: 100%;
   padding: 0.6rem 0.85rem;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   word-break: break-word;
 }
 /* `pre-wrap` is what made raw text readable, and it now belongs only to the kinds
@@ -1338,14 +1458,22 @@ button.tab-close:hover {
 }
 .bubble.you {
   align-self: flex-end;
-  background: var(--sheen-strong), var(--accent);
-  color: var(--accent-ink);
-  box-shadow: var(--shadow-2);
+  /* Your turn is a small neutral chip — a subtle raised panel, not a coloured bubble.
+     Accent is reserved for actions, never chrome. Kept compact so it never grows into a
+     wide chat bubble. */
+  background: color-mix(in srgb, var(--ink) 4%, var(--panel-2));
+  color: var(--ink);
+  border: 1px solid var(--line);
+  padding: 0.4rem 0.65rem;
+  border-radius: var(--radius-md);
+  font-size: 0.92rem;
 }
 .bubble.answer {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-1);
+  /* Borderless prose, like Codex/ChatGPT: the assistant answer IS the page, not a card.
+     The user chip carries the distinction; the answer just flows in the lane. */
+  background: transparent;
+  border: none;
+  padding-inline: 0;
 }
 /* The live cursor while this answer is the one streaming. `.streaming` is toggled by the
    render (see App.tsx `streamingId`) and only adds this pseudo-element — it never changes
@@ -1362,13 +1490,16 @@ button.tab-close:hover {
   background: var(--ink);
   animation: caret-blink 1s steps(1, end) infinite;
 }
+/* Reasoning/thinking: a subordinate side-note, not a second answer voice. Non-italic (a
+   long italic paragraph at low contrast is hard to read), smaller, dimmed, held off to the
+   side by a rail. NOTE: a proper collapse-under-a-"Reasoning"-toggle is still deferred. */
 .bubble.thought {
   color: var(--ink-soft);
-  font-size: 0.85rem;
-  font-style: italic;
-  padding: 0.2rem 0.85rem;
+  font-size: 0.82rem;
+  padding: 0.1rem 0 0.1rem 0.85rem;
   border-left: 2px solid var(--line);
   border-radius: 0;
+  opacity: 0.9;
 }
 .bubble.error {
   color: var(--danger);
@@ -1387,16 +1518,22 @@ button.tab-close:hover {
   position: relative;
   display: flex;
   flex-direction: column;
-  max-width: 72ch;
+  max-width: var(--lane);
 }
+/* Both roles ride the centred lane (via `.stream > *`). The distinction is carried
+   *inside* the lane, not by flying to the window edge: your message is a right-biased
+   accent chip; the assistant answer fills the lane. */
 .bubble-wrap:has(.bubble.you) {
-  align-self: flex-end;
+  align-items: flex-end;
 }
 .bubble-wrap:has(.bubble.answer) {
-  align-self: flex-start;
+  align-items: stretch;
 }
 .bubble-wrap > .bubble {
   max-width: 100%;
+}
+.bubble-wrap:has(.bubble.you) > .bubble {
+  max-width: min(75%, 34rem);
 }
 /* Keep the stream's entrance/lift motion working when a bubble is wrapped: the wrapper,
    not the bubble, is now the direct child of `.stream`. */
@@ -1407,7 +1544,9 @@ button.tab-close:hover {
   transition: transform var(--dur) var(--ease-out);
 }
 .stream > .bubble-wrap:has(.bubble.answer):hover .bubble.answer {
-  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  /* Borderless answers don't get a hover band — the message-actions row appearing is the
+     hover affordance, not a highlighted rectangle. */
+  background: transparent;
 }
 
 /* Hidden until the pointer or keyboard focus lands on the bubble it belongs to — a
@@ -1538,12 +1677,12 @@ button.tab-close:hover {
 }
 
 .md a {
-  color: var(--ink);
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 .md a:hover {
-  color: var(--ink-soft);
+  color: color-mix(in srgb, var(--accent) 75%, var(--ink));
 }
 /* A link whose href the sanitizer dropped (`javascript:`, `data:`). It still reads
    as the author's text, but it must not look like something you can click. */
@@ -1833,7 +1972,7 @@ button.tab-close:hover {
   align-items: center;
   justify-content: center;
   border: 1.5px dashed var(--accent);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   color: var(--ink-soft);
   background: var(--bg);
   opacity: 0.94;
@@ -1851,6 +1990,20 @@ button.tab-close:hover {
 .composer {
   /* Fixed: the composer never shrinks or grows to steal the stream's space. */
   flex: none;
+  padding: 0.9rem 1.25rem 1.05rem;
+  border-top: 1px solid var(--line);
+  /* A lit surface that lifts above the stream: the sheen tops it with light, the upward
+     shadow separates it from the transcript scrolling behind it. The surface spans the
+     window; its contents ride the lane. */
+  background: var(--panel);
+  box-shadow: none;
+}
+.composer-inner {
+  /* The composer's contents share the transcript's lane, so the input sits directly
+     under the conversation instead of stretching full-bleed. */
+  width: 100%;
+  max-width: var(--lane);
+  margin-inline: auto;
   /* Anchor the "/" and "@" autocomplete: .composer-ac is position:absolute with
      bottom:100%, so without a positioned ancestor here it anchored to .content and
      was thrown to the top of the pane — the menu rendered offscreen, which read as
@@ -1858,14 +2011,8 @@ button.tab-close:hover {
   position: relative;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.6rem;
   align-items: flex-end;
-  padding: 0.75rem;
-  border-top: 1px solid var(--line);
-  /* A lit surface that lifts above the stream: the sheen tops it with light, the upward
-     shadow separates it from the transcript scrolling behind it. */
-  background: var(--sheen), var(--panel);
-  box-shadow: 0 -6px 18px -14px rgba(0, 0, 0, 0.35);
 }
 .attachments {
   width: 100%;
@@ -1917,25 +2064,33 @@ button.tab-close:hover {
   color: var(--ink);
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  padding: 0.65rem 0.8rem;
   resize: none;
-  min-height: 2.6em;
-  max-height: 8em;
+  min-height: 2.9em;
+  /* Auto-grown from JS (see the effect keyed on the draft in App.tsx) up to this cap,
+     then it scrolls internally — a coding prompt is usually several lines. */
+  max-height: 12em;
   outline: none;
   box-shadow: var(--shadow-1);
   transition: border-color var(--dur) var(--ease-standard),
     box-shadow var(--dur) var(--ease-standard);
 }
 .composer textarea:focus {
-  border-color: var(--ink-soft);
-  box-shadow: var(--shadow-2);
+  /* A crisp accent ring, not a drop shadow — the IDE focus idiom. */
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.composer .primary,
+.composer-stop {
+  min-height: 2.9em;
+  align-self: stretch;
 }
 
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid var(--ink);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -1945,7 +2100,7 @@ textarea:focus-visible {
 
 .tool-card {
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   max-width: min(100%, 72ch);
   width: 100%;
@@ -2377,7 +2532,7 @@ textarea:focus-visible {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: var(--shadow-3);
   animation: scale-in var(--dur) var(--ease-out) both;
@@ -2469,7 +2624,7 @@ textarea:focus-visible {
   overflow-y: auto;
   padding: 0.35rem;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: var(--shadow-2);
   animation: scale-in var(--dur-fast) var(--ease-out) both;
@@ -2566,7 +2721,7 @@ textarea:focus-visible {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: var(--shadow-3);
   animation: scale-in var(--dur) var(--ease-out) both;
@@ -2793,7 +2948,7 @@ textarea:focus-visible {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: var(--shadow-3);
   animation: scale-in var(--dur) var(--ease-out) both;
@@ -3041,7 +3196,7 @@ textarea:focus-visible {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: var(--shadow-3);
   animation: scale-in var(--dur) var(--ease-out) both;
@@ -3748,7 +3903,7 @@ textarea:focus-visible {
 }
 
 .docv-zoom-btn:focus-visible {
-  outline: 2px solid var(--ink);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -3804,12 +3959,51 @@ textarea:focus-visible {
 
 /* ---- reasoning-effort dropdown (above the composer) ---- */
 .composer-toolbar {
-  /* Own row above the textarea (the composer is flex-wrap). */
+  /* A slim metadata strip on its own row BELOW the input (the composer is flex-wrap).
+     Low-emphasis composer controls, not a prominent toolbar. */
+  order: 9;
   flex-basis: 100%;
   width: 100%;
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  margin-top: 0.1rem;
+}
+/* A quiet, non-interactive label of what model this session is actually running — the
+   honest answer to "which model?" while the backend still advertises a single one. It
+   becomes a real picker the day more than one model is offered (see effort picker). */
+/* Read-only STATUS LABEL, not a control — grok currently exposes a single model, so this
+   must not masquerade as the (interactive) effort dropdown beside it. No border, no fill,
+   no hover: plain muted text. It becomes a real picker only if grok advertises >1 model. */
+.model-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.28rem 0.15rem;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  cursor: default;
+}
+.model-label strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.model-label .model-cap {
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+/* While a turn is running, Send becomes Stop — the one control a mistaken or expensive
+   turn needs, in the place the hand already is. Danger-toned, but never destructive. */
+.composer-stop {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
+  font-weight: 600;
+}
+.composer-stop:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  border-color: var(--danger);
 }
 .effort-picker {
   /* Anchor for .effort-menu (position:absolute; bottom:100%). Without this the
@@ -3822,7 +4016,7 @@ textarea:focus-visible {
   gap: var(--space-2);
   padding: 0.28rem 0.55rem;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   background: var(--bg);
   color: var(--ink);
   font: inherit;
@@ -3869,7 +4063,7 @@ textarea:focus-visible {
   list-style: none;
   min-width: 140px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: var(--shadow-2);
   animation: scale-in var(--dur-fast) var(--ease-out) both;
@@ -3901,4 +4095,15 @@ textarea:focus-visible {
   .effort-menu {
     animation: none;
   }
+}
+
+/* ---- coder signal: monospace for identifiers, paths, and counts (Codex/Zed voice).
+   Appended last so it wins over the per-component font on these specific elements. ---- */
+.folder .path,
+.content-title span,
+.usage-total,
+.model-label strong,
+.effort-value {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
 }

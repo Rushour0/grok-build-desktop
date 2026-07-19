@@ -7,6 +7,38 @@ to tagged GitHub releases.
 v0.9.7 was the final version on the original feature roadmap. v0.9.8 begins a UX-craft
 pass: making what already shipped feel intentional, and fixing the transcript.
 
+## [v0.10.0]
+
+A flat, minimal redesign toward a coder-first IDE feel (Codex / Zed / Linear), plus the
+controls a daily agent session needs.
+
+### Changed
+
+- **The transcript no longer sprawls.** Conversations now read down one centered column
+  instead of a phone-style left/right zig-zag with a hollow middle. Assistant answers are
+  borderless prose; your messages are a small neutral chip; the composer shares the same
+  lane so the input sits under the conversation.
+- **Flat, monochrome look.** Removed the gradients, sheens, and layered shadows in favour of
+  flat surfaces with 1px hairline borders (shadows are kept only for menus and modals). One
+  restrained blue accent, used only for the primary action, focus ring, links, and
+  selection. Monospace for paths, the model name, and token counts. Tighter radii.
+- **Merged header.** The project name/status folds into the tab row, so there's one bar
+  above the transcript instead of two.
+- **Compact composer.** The input and Send button share the primary row; effort and the
+  model label sit in a slim strip below it.
+- **Calmer sidebar.** Denser rows and a quieter selected state (a subtle tint plus the blue
+  rail), and a demoted, non-shouty "New chat" button.
+
+### Added
+
+- **Stop button.** While a turn is running, Send becomes Stop (also `⌘.` / `Ctrl+.`), so a
+  long or mistaken turn no longer means closing the conversation to interrupt it.
+- **"Jump to latest."** The transcript only auto-follows the live output when you're already
+  at the bottom; scroll up to read and a button brings you back.
+- **Auto-growing composer.** The input grows from one line up to a cap as you type, instead
+  of a fixed single-line strip.
+- **Model label.** The composer shows which model the session is running.
+
 ## [v0.9.11]
 
 ### Fixed
