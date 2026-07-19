@@ -20,6 +20,7 @@ import {
   isText,
   isTool,
   isUsage,
+  latestViewableAssetPath,
   sessionDate,
   sessionRows,
   splitSnippet,
@@ -546,5 +547,54 @@ describe("sessionRows", () => {
   it("the local fallback filter is case-insensitive", () => {
     expect(sessionRows(sessions, null, "ALPHA").map((row) => row.session.id)).toEqual(["a"]);
     expect(sessionRows(sessions, null, "lph").map((row) => row.session.id)).toEqual(["a"]);
+  });
+});
+
+describe("latestViewableAssetPath (auto-open generated assets)", () => {
+  function toolItem(over: Partial<Item> = {}): Item {
+    return {
+      id: "t",
+      kind: "tool",
+      title: "Write",
+      status: "completed",
+      meta: {} as never,
+      content: [],
+      locations: [],
+      ...over,
+    } as Item;
+  }
+
+  it("is null when nothing viewable was produced", () => {
+    expect(latestViewableAssetPath([])).toBeNull();
+    expect(
+      latestViewableAssetPath([{ id: "a", kind: "answer", text: "hi" } as Item]),
+    ).toBeNull();
+    // A live tool that only touched a non-viewable file.
+    expect(
+      latestViewableAssetPath([toolItem({ endedAt: 1, locations: [{ path: "notes.txt" }] })]),
+    ).toBeNull();
+  });
+
+  it("returns the viewable file a live tool produced", () => {
+    expect(
+      latestViewableAssetPath([toolItem({ endedAt: 5, locations: [{ path: "images/1.jpg" }] })]),
+    ).toBe("images/1.jpg");
+    expect(
+      latestViewableAssetPath([toolItem({ endedAt: 5, locations: [{ path: "report.pdf" }] })]),
+    ).toBe("report.pdf");
+  });
+
+  it("ignores replayed tools (no endedAt) so opening old chats never pops the viewer", () => {
+    expect(
+      latestViewableAssetPath([toolItem({ locations: [{ path: "images/old.png" }] })]),
+    ).toBeNull();
+  });
+
+  it("takes the newest live-produced asset when several exist", () => {
+    const items: Item[] = [
+      toolItem({ id: "t1", endedAt: 1, locations: [{ path: "first.png" }] }),
+      toolItem({ id: "t2", endedAt: 2, locations: [{ path: "second.png" }] }),
+    ];
+    expect(latestViewableAssetPath(items)).toBe("second.png");
   });
 });

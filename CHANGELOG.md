@@ -38,6 +38,10 @@ controls a daily agent session needs.
 - **Auto-growing composer.** The input grows from one line up to a cap as you type, instead
   of a fixed single-line strip.
 - **Model label.** The composer shows which model the session is running.
+- **Generated assets open themselves.** When Grok produces a viewable file — an image, PDF,
+  or Word document — it opens automatically in the side viewer the moment the turn finishes,
+  instead of leaving you to find and click the path. Opens once per file, only for the tab
+  you're looking at. (In-app video isn't supported yet.)
 
 ## [v0.9.11]
 
