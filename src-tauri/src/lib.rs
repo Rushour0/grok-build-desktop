@@ -1964,7 +1964,15 @@ fn read_file_preview_inner(path: &str, cwd: &str) -> Result<ReadFilePreviewResul
     // before comparing, so a path suggestion from the webview cannot escape its project.
     let root = std::fs::canonicalize(cwd).map_err(|e| format!("Can't resolve project root: {e}"))?;
     let real = std::fs::canonicalize(path).map_err(|e| format!("Can't open `{path}`: {e}"))?;
-    if !real.starts_with(&root) {
+    // Reads are allowed inside the project, OR inside grok's own per-session folder
+    // (`~/.grok/sessions/…`) — that's where generated assets (image_gen output, etc.) are
+    // saved, and they live outside the project tree. Still a bounded, trusted root, so the
+    // canonicalized-prefix boundary holds: nothing else on disk becomes readable.
+    let in_grok_sessions = home_dir()
+        .map(|h| h.join(".grok").join("sessions"))
+        .and_then(|dir| std::fs::canonicalize(dir).ok())
+        .is_some_and(|dir| real.starts_with(&dir));
+    if !real.starts_with(&root) && !in_grok_sessions {
         return Err(format!(
             "`{path}` is outside the project folder — refusing to read it."
         ));

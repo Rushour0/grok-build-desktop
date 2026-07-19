@@ -597,4 +597,32 @@ describe("latestViewableAssetPath (auto-open generated assets)", () => {
     ];
     expect(latestViewableAssetPath(items)).toBe("second.png");
   });
+
+  it("finds image_gen's saved path from result content (it has no locations)", () => {
+    const gen = toolItem({
+      id: "gen",
+      endedAt: 3,
+      locations: [],
+      content: [
+        {
+          type: "content",
+          content: {
+            type: "text",
+            text: '{"path":"/Users/x/.grok/sessions/abc/images/1.jpg","filename":"1.jpg","session_folder":"images"}',
+          },
+        },
+      ],
+    });
+    expect(latestViewableAssetPath([gen])).toBe("/Users/x/.grok/sessions/abc/images/1.jpg");
+  });
+
+  it("ignores a non-viewable path reported in tool content", () => {
+    const t = toolItem({
+      id: "t",
+      endedAt: 3,
+      locations: [],
+      content: [{ type: "content", content: { type: "text", text: '{"path":"/tmp/log.txt"}' } }],
+    });
+    expect(latestViewableAssetPath([t])).toBeNull();
+  });
 });

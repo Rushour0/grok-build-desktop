@@ -270,12 +270,25 @@ export function isImagePath(path: string): boolean {
 /// so the last file the turn touched wins. Returns null when the turn produced nothing
 /// viewable.
 export function latestViewableAssetPath(items: Item[]): string | null {
+  const viewable = (path: string): boolean => {
+    const fmt = detectDocFormat(path);
+    return fmt === "image" || fmt === "pdf" || fmt === "docx";
+  };
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i];
-    if (!isTool(item) || !item.endedAt || !item.locations) continue;
-    for (let j = item.locations.length - 1; j >= 0; j--) {
-      const fmt = detectDocFormat(item.locations[j].path);
-      if (fmt === "image" || fmt === "pdf" || fmt === "docx") return item.locations[j].path;
+    if (!isTool(item) || !item.endedAt) continue;
+    // File-touching tools (write_file, edit, …) report their files in `locations`.
+    for (let j = (item.locations?.length ?? 0) - 1; j >= 0; j--) {
+      if (viewable(item.locations[j].path)) return item.locations[j].path;
+    }
+    // image_gen (and friends) carry NO `locations`; they return the saved file's path in
+    // their result content — either a `path` field or a `{"path":"…"}` JSON blob. The path
+    // is absolute and lives in grok's session folder (Rust's reader allows that root).
+    for (const block of item.content ?? []) {
+      if (block.path && viewable(block.path)) return block.path;
+      const text = block.content?.text ?? block.text;
+      const match = text?.match(/"path"\s*:\s*"([^"]+)"/);
+      if (match && viewable(match[1])) return match[1];
     }
   }
   return null;
