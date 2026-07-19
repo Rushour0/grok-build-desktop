@@ -3770,3 +3770,135 @@ textarea:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+/* ---- image viewer ---- */
+.docv-image {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.docv-image-stage {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: var(--bg);
+}
+/* Canvas paints at image × zoom; the stage scrolls when that exceeds the panel.
+   A subtle checker helps transparent PNGs read against the panel. */
+.docv-image-canvas {
+  display: block;
+  background-color: var(--panel);
+  background-image:
+    linear-gradient(45deg, var(--line) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--line) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--line) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--line) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  box-shadow: var(--shadow-2);
+}
+
+/* ---- reasoning-effort dropdown (above the composer) ---- */
+.composer-toolbar {
+  /* Own row above the textarea (the composer is flex-wrap). */
+  flex-basis: 100%;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.effort-picker {
+  /* Anchor for .effort-menu (position:absolute; bottom:100%). Without this the
+     menu escapes to the nearest positioned ancestor — the autocomplete bug. */
+  position: relative;
+}
+.effort-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+.effort-trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--ink) 30%, var(--line));
+}
+.effort-trigger:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.effort-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.effort-cap {
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.effort-value {
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.effort-chevron {
+  width: 0;
+  height: 0;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-top: 4px solid var(--ink-soft);
+}
+.effort-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  z-index: 6;
+  margin: 0 0 0.35rem;
+  padding: 0.25rem;
+  list-style: none;
+  min-width: 140px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+  animation: scale-in var(--dur-fast) var(--ease-out) both;
+}
+.effort-option {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  text-transform: capitalize;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-standard);
+}
+.effort-option:hover {
+  background: var(--bg);
+}
+.effort-option.active {
+  background: var(--bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+@media (prefers-reduced-motion: reduce) {
+  .effort-menu {
+    animation: none;
+  }
+}

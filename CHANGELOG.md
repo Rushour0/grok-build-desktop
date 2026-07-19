@@ -7,6 +7,17 @@ to tagged GitHub releases.
 v0.9.7 was the final version on the original feature roadmap. v0.9.8 begins a UX-craft
 pass: making what already shipped feel intentional, and fixing the transcript.
 
+## [v0.9.10]
+
+### Added
+
+- **In-app image viewer.** Click a `.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.avif`, or
+  `.ico` file path in a tool card to open it in the viewer, with zoom — alongside PDF
+  and DOCX. (Animated GIFs show their first frame; `.svg` isn't supported yet.)
+- **Reasoning-effort dropdown.** Switch Grok's thinking effort right above the composer
+  instead of digging into Preferences — the biggest token lever, one click away. Appears
+  only when the current session supports it.
+
 ## [v0.9.9]
 
 ### Added

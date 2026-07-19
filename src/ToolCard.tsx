@@ -86,7 +86,7 @@ export function ToolCard({
             <div className="tool-card-locs">
               {item.locations.map((l, i) => {
                 const fmt = detectDocFormat(l.path);
-                const openable = onOpenDocument && (fmt === "pdf" || fmt === "docx");
+                const openable = onOpenDocument && (fmt === "pdf" || fmt === "docx" || fmt === "image");
                 return openable ? (
                   <button
                     type="button"

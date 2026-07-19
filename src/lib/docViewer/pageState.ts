@@ -25,3 +25,17 @@ export function zoomIn(zoom: number): number {
 export function zoomOut(zoom: number): number {
   return clampZoom(zoom - ZOOM_STEP);
 }
+
+/// Pixel dimensions for a canvas showing content of natural size (width×height)
+/// at `scale`. Rounds to whole pixels and never returns a zero/negative dimension
+/// (a 0×0 canvas throws in some engines), so a degenerate image or a tiny scale
+/// still yields a paintable 1px-minimum surface.
+export function scaledSize(
+  width: number,
+  height: number,
+  scale: number,
+): { width: number; height: number } {
+  const safe = (value: number) =>
+    Number.isFinite(value) ? Math.max(1, Math.round(value)) : 1;
+  return { width: safe(width * scale), height: safe(height * scale) };
+}
