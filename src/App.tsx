@@ -29,6 +29,8 @@ import {
   subscribe,
   listProjectFiles,
   grokVersion,
+  grokProfile,
+  type GrokProfile,
   readonlyTools,
   rewindPoints,
   rewindExecute,
@@ -573,6 +575,7 @@ export default function App() {
   // Full auth/install status, captured at bootstrap alongside the existing
   // `grok_installed` check — About needs the path and sign-in state too.
   const [authInfo, setAuthInfo] = useState<AuthStatus | null>(null);
+  const [profile, setProfile] = useState<GrokProfile | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [recents, setRecents] = useState<Project[]>([]);
   /// An `open_project` is in flight. Decoration for the launcher's wait, nothing
@@ -763,6 +766,13 @@ export default function App() {
     }
     applyAccent(accent);
   }, [accent]);
+
+  // The signed-in account for the sidebar footer — read once on boot.
+  useEffect(() => {
+    grokProfile()
+      .then(setProfile)
+      .catch(() => {});
+  }, []);
 
   // Track whether the stream is scrolled to (near) its tail. A small threshold means a
   // stray pixel or the streaming caret's growth doesn't count as "scrolled away".
@@ -2246,14 +2256,22 @@ export default function App() {
           {/* Account/status footer, à la the reference: a mark, the sign-in state, and the
               grok CLI version when we have it. */}
           <div className="sidebar-foot">
-            <span className="sidebar-foot-mark" aria-hidden="true" />
+            <span className="sidebar-foot-mark" aria-hidden="true">
+              {profile?.first_name?.trim()?.[0]?.toUpperCase() ?? ""}
+            </span>
             <div className="sidebar-foot-text">
-              <strong>{authInfo?.has_login ? "Signed in" : "Not signed in"}</strong>
-              <span>{authInfo?.has_login ? "grok · x.ai" : "Sign in to start"}</span>
+              <strong>
+                {profile?.first_name ?? (authInfo?.has_login ? "Signed in" : "Not signed in")}
+              </strong>
+              <span>
+                {profile?.email ?? (authInfo?.has_login ? "grok · x.ai" : "Sign in to start")}
+              </span>
             </div>
             {cliVersion && <span className="sidebar-foot-ver">{cliVersion}</span>}
             <span
-              className={"sidebar-foot-dot" + (authInfo?.has_login ? " on" : "")}
+              className={
+                "sidebar-foot-dot" + (profile?.signed_in || authInfo?.has_login ? " on" : "")
+              }
               aria-hidden="true"
             />
           </div>

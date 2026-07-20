@@ -144,6 +144,15 @@ export const readFilePreview = (path: string, cwd: string) =>
 /// rather than returning empty on failure — see HANDOFF #3.
 export const grokVersion = () => invoke<string>("grok_version");
 
+/// The signed-in grok account (name + email only), for the sidebar footer. Read from
+/// `~/.grok/auth.json`; never carries tokens.
+export interface GrokProfile {
+  signed_in: boolean;
+  first_name: string | null;
+  email: string | null;
+}
+export const grokProfile = () => invoke<GrokProfile>("grok_profile");
+
 /// The app's hardcoded default-deny allowlist of local read-only tools that run
 /// without asking first (READONLY_TOOLS in lib.rs). Transparency only — this is
 /// not a source of truth the frontend can widen; Rust's allowlist stays sole authority.

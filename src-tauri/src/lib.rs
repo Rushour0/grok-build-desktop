@@ -1949,6 +1949,44 @@ struct ReadFilePreviewResult {
 
 const MAX_PREVIEW_BYTES: u64 = 50 * 1024 * 1024;
 
+/// The signed-in grok account, for the sidebar footer. Read from `~/.grok/auth.json` — a
+/// JSON object with a single key whose value carries the account fields. Only the display
+/// fields are surfaced; the `key`/`refresh_token` secrets are never read out.
+#[derive(Serialize)]
+struct GrokProfile {
+    signed_in: bool,
+    first_name: Option<String>,
+    email: Option<String>,
+}
+
+#[tauri::command]
+fn grok_profile() -> GrokProfile {
+    let empty = GrokProfile {
+        signed_in: false,
+        first_name: None,
+        email: None,
+    };
+    let Some(home) = home_dir() else {
+        return empty;
+    };
+    let Ok(text) = std::fs::read_to_string(home.join(".grok").join("auth.json")) else {
+        return empty;
+    };
+    let Ok(root) = serde_json::from_str::<Value>(&text) else {
+        return empty;
+    };
+    // The account fields live on the (single) entry's value object.
+    let Some(v) = root.as_object().and_then(|o| o.values().next()) else {
+        return empty;
+    };
+    let get = |k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);
+    GrokProfile {
+        signed_in: v.get("email").is_some(),
+        first_name: get("first_name"),
+        email: get("email"),
+    }
+}
+
 #[tauri::command]
 async fn read_file_preview(path: String, cwd: String) -> Result<ReadFilePreviewResult, String> {
     // Reading arbitrary project files can block on disk, so keep it off the tokio worker.
@@ -3205,6 +3243,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            grok_profile,
             grok_installed,
             auth_status,
             grok_version,
