@@ -7,6 +7,24 @@ to tagged GitHub releases.
 v0.9.7 was the final version on the original feature roadmap. v0.9.8 begins a UX-craft
 pass: making what already shipped feel intentional, and fixing the transcript.
 
+## [v0.11.0]
+
+### Added
+
+- **Inspector panels.** A new sidebar nav opens read-only panels for your **Sessions**
+  (across every project), installed **Plugins** (skills / agents / personas + marketplace
+  sources), **Config & Auth** (your account + grok's `config.toml`, secrets hidden), and the
+  project's git **Worktrees**.
+- **Your account in the sidebar.** The footer shows your signed-in name, email, and an
+  initial avatar.
+- **Themeable accent.** A warm amber accent by default, switchable to Blue or Green in
+  Preferences → Appearance (each stays readable in light and dark).
+
+### Changed
+
+- **Sidebar** gains a "Recents" header and the icon nav above.
+- **Composer** Send and Stop are round icon buttons.
+
 ## [v0.10.3]
 
 ### Added
