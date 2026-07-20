@@ -7,7 +7,7 @@ import type { ToolCallContent } from "./bridge";
 /// Whether a path is one the in-app side viewer can render (image / pdf / docx).
 export function isViewablePath(path: string): boolean {
   const fmt = detectDocFormat(path);
-  return fmt === "image" || fmt === "pdf" || fmt === "docx";
+  return fmt === "image" || fmt === "pdf" || fmt === "docx" || fmt === "video";
 }
 
 /// The viewable file (image / pdf / docx) a tool produced, from its `locations` OR its

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { DocxRenderer } from "./DocxRenderer";
 import { PdfRenderer } from "./PdfRenderer";
 import { ImageRenderer } from "./ImageRenderer";
+import { VideoRenderer } from "./VideoRenderer";
 import { readFilePreview } from "./lib/bridge";
 import { detectDocFormat } from "./lib/docViewer/formatDetect";
 import { checkSizeCap } from "./lib/docViewer/sizeGuard";
@@ -153,6 +154,8 @@ export function DocViewerPanel({
     content = <DocxRenderer data={state.bytes} />;
   } else if (format === "image") {
     content = <ImageRenderer data={state.bytes} />;
+  } else if (format === "video") {
+    content = <VideoRenderer data={state.bytes} path={path} />;
   } else {
     content = <UnsupportedPreview />;
   }

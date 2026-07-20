@@ -45,4 +45,10 @@ describe("detectDocFormat", () => {
   it("treats svg as unsupported (createImageBitmap is unreliable for it)", () => {
     expect(detectDocFormat("logo.svg")).toBe("unsupported");
   });
+
+  it("detects video extensions", () => {
+    expect(detectDocFormat("clip.mp4")).toBe("video");
+    expect(detectDocFormat("/renders/out.WEBM")).toBe("video");
+    expect(detectDocFormat("screen.mov")).toBe("video");
+  });
 });

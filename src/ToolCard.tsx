@@ -61,7 +61,13 @@ export function ToolCard({
   const viewable = viewableAssetFrom(item.locations, item.content);
   const viewFmt = viewable ? detectDocFormat(viewable) : "unsupported";
   const viewLabel =
-    viewFmt === "image" ? "View image" : viewFmt === "pdf" ? "View PDF" : "View document";
+    viewFmt === "image"
+      ? "View image"
+      : viewFmt === "pdf"
+        ? "View PDF"
+        : viewFmt === "video"
+          ? "View video"
+          : "View document";
 
   return (
     <div className={"tool-card " + item.status + (expanded ? " expanded" : "") + (failed ? " failed" : "")}>
