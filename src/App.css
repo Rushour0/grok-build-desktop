@@ -639,15 +639,86 @@ button.open-folder {
 .side-search:focus {
   border-color: var(--ink-soft);
 }
+/* Section header over the conversation list — "Recents", like the reference. */
+.side-list-label {
+  margin: 0.75rem 0 0.1rem;
+  padding: 0 0.65rem;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
 .side-list {
   min-height: 0;
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 0.15rem;
-  margin-top: 0.65rem;
+  margin-top: 0.35rem;
   padding-right: 0.1rem;
   overflow-y: auto;
+}
+
+/* Account / status footer pinned to the bottom of the sidebar. */
+.sidebar-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0.6rem 0.4rem 0.2rem;
+  border-top: 1px solid var(--line);
+}
+.sidebar-foot-mark {
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+.sidebar-foot-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.sidebar-foot-text strong {
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-foot-text span {
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-foot-ver {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--ink-soft);
+}
+.sidebar-foot-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+  opacity: 0.5;
+}
+.sidebar-foot-dot.on {
+  background: var(--ok);
+  opacity: 1;
+}
+/* When a version is shown, the dot doesn't also need the auto-margin push. */
+.sidebar-foot-ver + .sidebar-foot-dot {
+  margin-left: 0.4rem;
 }
 button.side-row {
   position: relative;

@@ -2167,6 +2167,7 @@ export default function App() {
             placeholder="Search conversations"
             aria-label="Search conversations"
           />
+          {historySessions.length > 0 && <div className="side-list-label">Recents</div>}
           <div className="side-list">
             {/* Above the list, not inside the empty-state branch: a broken content
                 search still leaves the local title matches standing, and those are
@@ -2241,6 +2242,20 @@ export default function App() {
                   </button>
                 );
               })}
+          </div>
+          {/* Account/status footer, à la the reference: a mark, the sign-in state, and the
+              grok CLI version when we have it. */}
+          <div className="sidebar-foot">
+            <span className="sidebar-foot-mark" aria-hidden="true" />
+            <div className="sidebar-foot-text">
+              <strong>{authInfo?.has_login ? "Signed in" : "Not signed in"}</strong>
+              <span>{authInfo?.has_login ? "grok · x.ai" : "Sign in to start"}</span>
+            </div>
+            {cliVersion && <span className="sidebar-foot-ver">{cliVersion}</span>}
+            <span
+              className={"sidebar-foot-dot" + (authInfo?.has_login ? " on" : "")}
+              aria-hidden="true"
+            />
           </div>
         </aside>
 
