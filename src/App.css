@@ -567,12 +567,40 @@ button.recent span {
   /* Recessed: the content pane reads as lifted above the sidebar because the sidebar's
      inner-right edge falls into shadow. Depth from layering, not just from card shadows. */
   box-shadow: none;
-  /* Collapsing slides it left off the edge (clipped by `.shell-body`'s overflow) and lets
-     the content pane grow into the space — a real hide, not just a width shrink. */
-  transition: margin-left var(--dur-slow) var(--ease-out);
+  /* Collapsing shrinks it to a minified icon rail (see `.sidebar.collapsed`), not off-screen. */
+  transition: width var(--dur-slow) var(--ease-out), padding var(--dur-slow) var(--ease-out);
 }
+/* Minified icon rail — collapsed keeps the sidebar on the left (nav icons, new-chat, brand
+   mark, avatar) rather than hiding it. Labels/search/list fold away via font-size:0, which
+   collapses the text nodes while each button's fixed-size SVG icon stays. */
 .sidebar.collapsed {
-  margin-left: -273px;
+  width: 3.6rem;
+  padding-inline: 0.3rem;
+  overflow: hidden;
+}
+.sidebar.collapsed .sidebar-brand strong,
+.sidebar.collapsed .open-folder,
+.sidebar.collapsed .side-search,
+.sidebar.collapsed .side-list-label,
+.sidebar.collapsed .side-list,
+.sidebar.collapsed .sidebar-foot-text,
+.sidebar.collapsed .sidebar-foot-ver {
+  display: none;
+}
+.sidebar.collapsed .side-nav-item,
+.sidebar.collapsed .new-chat {
+  font-size: 0;
+  gap: 0;
+  justify-content: center;
+  padding-inline: 0;
+}
+.sidebar.collapsed .new-chat-plus {
+  font-size: 1.15rem;
+}
+.sidebar.collapsed .sidebar-brand,
+.sidebar.collapsed .sidebar-foot {
+  justify-content: center;
+  padding-inline: 0;
 }
 .sidebar-head {
   display: flex;
@@ -2313,18 +2341,20 @@ textarea:focus-visible {
   align-self: center;
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.35rem;
   margin: 0 0.5rem;
-  padding: 0.22rem 0.55rem;
-  border: 1px solid var(--line);
+  padding: 0.28rem 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
   border-radius: var(--radius-md);
-  background: var(--panel);
-  color: var(--ink-soft);
-  font-size: 0.75rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 0.76rem;
+  font-weight: 500;
+  white-space: nowrap;
 }
 .tool-card-view:hover {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent);
 }
 /* A generic dot by default; specific kinds (read/write/exec/search/…) get a shape via
    `data-kind` so the icon still reads without pulling in an icon font or SVG sprite. */
@@ -3959,6 +3989,7 @@ textarea:focus-visible {
    sibling of `.content` inside `.shell-body`, so the transcript simply shrinks to make
    room and stays fully interactive. ---- */
 .docviewer {
+  position: relative;
   flex: none;
   width: clamp(340px, 42%, 680px);
   min-width: 0;
@@ -3967,6 +3998,19 @@ textarea:focus-visible {
   border-left: 1px solid var(--line);
   background: var(--bg);
   animation: docviewer-in var(--dur) var(--ease-out);
+}
+/* Drag strip on the panel's left edge to resize it. */
+.docviewer-resize {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 5;
+}
+.docviewer-resize:hover {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 @keyframes docviewer-in {
   from {

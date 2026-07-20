@@ -20,6 +20,21 @@ export function ImageRenderer({ data }: { data: Uint8Array }): React.ReactElemen
   const [dims, setDims] = useState<{ width: number; height: number } | null>(null);
   const bitmapRef = useRef<ImageBitmap | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+
+  // Mouse-wheel / trackpad zoom over the image. A native non-passive listener so
+  // preventDefault actually stops the page/panel from scrolling while zooming.
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setScale((s) => clampZoom(s * factor));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
 
   // Decode the bytes once per `data`. createImageBitmap does not go through the
   // CSP img-src check (it decodes an in-memory Blob, it doesn't load a URL).
@@ -127,7 +142,7 @@ export function ImageRenderer({ data }: { data: Uint8Array }): React.ReactElemen
           </span>
         )}
       </div>
-      <div className="docv-image-stage">
+      <div className="docv-image-stage" ref={stageRef}>
         <canvas ref={canvasRef} className="docv-image-canvas" />
       </div>
     </div>

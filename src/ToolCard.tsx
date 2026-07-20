@@ -59,6 +59,9 @@ export function ToolCard({
   // gets an explicit "View" button so it can be opened in the side viewer any time, not only
   // via the one-shot auto-open.
   const viewable = viewableAssetFrom(item.locations, item.content);
+  const viewFmt = viewable ? detectDocFormat(viewable) : "unsupported";
+  const viewLabel =
+    viewFmt === "image" ? "View image" : viewFmt === "pdf" ? "View PDF" : "View document";
 
   return (
     <div className={"tool-card " + item.status + (expanded ? " expanded" : "") + (failed ? " failed" : "")}>
@@ -83,11 +86,11 @@ export function ToolCard({
             onClick={() => onOpenDocument(viewable)}
             title="Open in the side viewer"
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
               <circle cx="12" cy="12" r="3" />
             </svg>
-            View
+            {viewLabel}
           </button>
         )}
       </div>

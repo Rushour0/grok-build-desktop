@@ -34,6 +34,9 @@ function UnsupportedPreview(): React.ReactElement {
   );
 }
 
+const MIN_WIDTH = 340;
+const DEFAULT_WIDTH = 560;
+
 export function DocViewerPanel({
   path,
   cwd,
@@ -45,6 +48,37 @@ export function DocViewerPanel({
 }): React.ReactElement | null {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
   const activePath = useRef<string | null>(null);
+  const [width, setWidth] = useState<number>(() => {
+    const stored = Number(localStorage.getItem("docviewerWidth"));
+    return Number.isFinite(stored) && stored >= MIN_WIDTH ? stored : DEFAULT_WIDTH;
+  });
+  const widthRef = useRef(width);
+  widthRef.current = width;
+
+  // Drag the left edge to resize; clamped so the transcript keeps at least ~360px. Persisted.
+  const startResize = (event: React.MouseEvent) => {
+    event.preventDefault();
+    const onMove = (ev: MouseEvent) => {
+      const next = Math.max(MIN_WIDTH, Math.min(window.innerWidth - ev.clientX, window.innerWidth - 360));
+      widthRef.current = next;
+      setWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      try {
+        localStorage.setItem("docviewerWidth", String(Math.round(widthRef.current)));
+      } catch {
+        // no storage in private mode — fine, width just won't persist across launches.
+      }
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   useEffect(() => {
     if (!path) return;
@@ -124,7 +158,15 @@ export function DocViewerPanel({
   }
 
   return (
-    <aside className="docviewer" aria-label="File preview">
+    <aside className="docviewer" aria-label="File preview" style={{ width }}>
+      <div
+        className="docviewer-resize"
+        onMouseDown={startResize}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize preview panel"
+        title="Drag to resize"
+      />
       <div className="docviewer-head">
         <span className="docviewer-title" title={path}>
           {basename(path)}
