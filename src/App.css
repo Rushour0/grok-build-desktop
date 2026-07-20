@@ -2179,9 +2179,34 @@ button.tab-close:hover {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 .composer .primary,
+/* Send / Stop are circular icon buttons (accent send, danger stop), pinned to the bottom
+   of the auto-growing input — matching the reference's round send control. */
+.composer-send,
 .composer-stop {
-  min-height: 2.9em;
-  align-self: stretch;
+  flex: none;
+  align-self: flex-end;
+  width: 2.3rem;
+  height: 2.3rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+.composer-send {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.composer-send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, #000);
+  border-color: color-mix(in srgb, var(--accent) 88%, #000);
+}
+.composer-send:disabled {
+  background: var(--panel-2);
+  border-color: var(--line);
+  color: var(--ink-soft);
+  opacity: 1;
 }
 
 button:focus-visible,
