@@ -2906,7 +2906,12 @@ textarea:focus-visible {
 }
 
 .prefs-section {
-  padding: 0;
+  /* Inset to match the header (`.prefs-head` uses 1.1rem) so section content doesn't run
+     to the modal edges. */
+  padding: 0.75rem 1.1rem;
+}
+.prefs-section + .prefs-section {
+  padding-top: 0.25rem;
 }
 .prefs-section:last-child {
   border-bottom: none;
