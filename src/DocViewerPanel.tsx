@@ -124,13 +124,22 @@ export function DocViewerPanel({
   }
 
   return (
-    <div className="prefs-backdrop" onClick={onClose}>
-      <div className="prefs doc-viewer-panel" onClick={(event) => event.stopPropagation()}>
-        <div className="prefs-head">
-          <span>{basename(path)}</span>
-        </div>
-        <div className="docv-body">{content}</div>
+    <aside className="docviewer" aria-label="File preview">
+      <div className="docviewer-head">
+        <span className="docviewer-title" title={path}>
+          {basename(path)}
+        </span>
+        <button
+          type="button"
+          className="docviewer-close"
+          onClick={onClose}
+          aria-label="Close preview"
+          title="Close preview (Esc)"
+        >
+          ×
+        </button>
       </div>
-    </div>
+      <div className="docv-body">{content}</div>
+    </aside>
   );
 }

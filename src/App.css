@@ -3736,11 +3736,63 @@ textarea:focus-visible {
   }
 }
 
-/* ---- doc viewer ---- */
-.doc-viewer-panel {
-  width: min(1100px, 92vw);
-  max-width: min(1100px, 92vw);
-  max-height: 90vh;
+/* ---- doc viewer: a right-docked split-view side panel (NOT a modal), so a generated
+   image / document sits alongside the conversation instead of covering it. It's a flex
+   sibling of `.content` inside `.shell-body`, so the transcript simply shrinks to make
+   room and stays fully interactive. ---- */
+.docviewer {
+  flex: none;
+  width: clamp(340px, 42%, 680px);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: var(--bg);
+  animation: docviewer-in var(--dur) var(--ease-out);
+}
+@keyframes docviewer-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.docviewer-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem 0.4rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.docviewer-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.8rem;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.docviewer-close {
+  flex: none;
+  width: 1.9rem;
+  height: 1.9rem;
+  padding: 0;
+  border-color: transparent;
+  color: var(--ink-soft);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+.docviewer-close:hover {
+  border-color: var(--line);
+  background: var(--bg);
+  color: var(--ink);
 }
 
 .docv-body {

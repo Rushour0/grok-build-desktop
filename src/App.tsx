@@ -42,8 +42,9 @@ import {
   type SessionMeta,
   type SessionModelInfo,
   type SessionUpdate,
+  type ToolCallContent,
 } from "./lib/bridge";
-import { toolFieldsFromCall, mergeToolUpdate, type ToolFields } from "./lib/toolMeta";
+import { toolFieldsFromCall, mergeToolUpdate, toolContentOf, type ToolFields } from "./lib/toolMeta";
 import { ToolCard } from "./ToolCard";
 import { CodeBlock } from "./CodeBlock";
 import { CommandPalette, type PaletteAction } from "./CommandPalette";
@@ -269,27 +270,38 @@ export function isImagePath(path: string): boolean {
 /// an old conversation never auto-pops the viewer for a historical file. Scans newest-first
 /// so the last file the turn touched wins. Returns null when the turn produced nothing
 /// viewable.
+function isViewablePath(path: string): boolean {
+  const fmt = detectDocFormat(path);
+  return fmt === "image" || fmt === "pdf" || fmt === "docx";
+}
+
+/// The viewable file (image / pdf / docx) a tool produced, from its `locations` OR its
+/// result `content`. File-touching tools (write_file, edit, …) list files in `locations`;
+/// image_gen carries NO `locations` and instead returns the saved file's absolute path in
+/// its result content — a `path` field or a `{"path":"…"}` JSON blob (the path lives in
+/// grok's session folder, which the Rust reader allows). Returns the first match, or null.
+export function viewableAssetFrom(
+  locations: { path: string }[] | undefined,
+  content: ToolCallContent[] | undefined,
+): string | null {
+  for (const loc of locations ?? []) {
+    if (isViewablePath(loc.path)) return loc.path;
+  }
+  for (const block of content ?? []) {
+    if (block.path && isViewablePath(block.path)) return block.path;
+    const text = block.content?.text ?? block.text;
+    const match = text?.match(/"path"\s*:\s*"([^"]+)"/);
+    if (match && isViewablePath(match[1])) return match[1];
+  }
+  return null;
+}
+
 export function latestViewableAssetPath(items: Item[]): string | null {
-  const viewable = (path: string): boolean => {
-    const fmt = detectDocFormat(path);
-    return fmt === "image" || fmt === "pdf" || fmt === "docx";
-  };
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i];
     if (!isTool(item) || !item.endedAt) continue;
-    // File-touching tools (write_file, edit, …) report their files in `locations`.
-    for (let j = (item.locations?.length ?? 0) - 1; j >= 0; j--) {
-      if (viewable(item.locations[j].path)) return item.locations[j].path;
-    }
-    // image_gen (and friends) carry NO `locations`; they return the saved file's path in
-    // their result content — either a `path` field or a `{"path":"…"}` JSON blob. The path
-    // is absolute and lives in grok's session folder (Rust's reader allows that root).
-    for (const block of item.content ?? []) {
-      if (block.path && viewable(block.path)) return block.path;
-      const text = block.content?.text ?? block.text;
-      const match = text?.match(/"path"\s*:\s*"([^"]+)"/);
-      if (match && viewable(match[1])) return match[1];
-    }
+    const asset = viewableAssetFrom(item.locations, item.content);
+    if (asset) return asset;
   }
   return null;
 }
@@ -1132,6 +1144,19 @@ export default function App() {
               return justEnded ? { ...merged, endedAt: Date.now() } : merged;
             }),
           }));
+          // The instant a tool finishes and has produced a viewable file (image_gen output,
+          // a written PDF/doc, …), open it in the side viewer — active tab only, once per
+          // file. Done on completion, NOT at turn-end: a turn can end before or separately
+          // from when the tool's completed payload lands, which is why the turn-end trigger
+          // was missing generated images.
+          if (u.status === "completed" && tabId === activeTabIdRef.current) {
+            const asset = viewableAssetFrom(u.locations, toolContentOf(u));
+            if (asset && !autoOpenedAssetsRef.current.has(asset)) {
+              autoOpenedAssetsRef.current.add(asset);
+              const tab = tabsRef.current.find((candidate) => candidate.id === tabId);
+              if (tab) setDocViewer({ path: asset, cwd: tab.cwd });
+            }
+          }
           break;
         }
         case "plan": {
@@ -2525,6 +2550,13 @@ export default function App() {
             </div>
           )}
         </main>
+        {/* Docked to the right of the content as a split-view side panel (not a modal),
+            so a generated image / document sits alongside the conversation. */}
+        <DocViewerPanel
+          path={docViewer?.path ?? null}
+          cwd={docViewer?.cwd ?? ""}
+          onClose={() => setDocViewer(null)}
+        />
       </div>
       <CommandPalette open={paletteOpen} actions={paletteActions} onClose={() => setPaletteOpen(false)} />
       <Preferences
@@ -2552,11 +2584,6 @@ export default function App() {
         onConfirm={(pointId, mode) => void confirmRewind(pointId, mode)}
       />
       <TasksPanel open={tasksOpen} onClose={() => setTasksOpen(false)} tasks={activeTab?.tasks ?? []} />
-      <DocViewerPanel
-        path={docViewer?.path ?? null}
-        cwd={docViewer?.cwd ?? ""}
-        onClose={() => setDocViewer(null)}
-      />
       <ReceiptPanel
         open={receiptOpen}
         onClose={() => setReceiptOpen(false)}
