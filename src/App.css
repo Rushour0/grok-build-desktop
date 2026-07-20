@@ -1558,11 +1558,14 @@ button.tab-close:hover {
    correct (if instant) show/hide. Positioned to hover just above the bubble's near-top
    corner so it never sits over the text itself, even on narrow columns. */
 .msg-actions {
+  /* Assistant (answer) actions sit on the LEFT, under the message; user actions flip to
+     the RIGHT (below). Each row hugs the side its message is on. */
   position: absolute;
   top: -0.7rem;
-  right: 0.4rem;
+  left: 0.4rem;
+  right: auto;
   display: flex;
-  gap: 0.3rem;
+  gap: 0.25rem;
   opacity: 0;
   pointer-events: none;
   transform: translateY(2px);
@@ -1571,8 +1574,8 @@ button.tab-close:hover {
   z-index: 1;
 }
 .bubble-wrap:has(.bubble.you) .msg-actions {
-  right: auto;
-  left: 0.4rem;
+  left: auto;
+  right: 0.4rem;
 }
 .bubble-wrap:hover > .msg-actions,
 .bubble-wrap:focus-within > .msg-actions,
@@ -1589,14 +1592,15 @@ button.tab-close:hover {
 .msg-action {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.22rem 0.5rem;
-  border-radius: 6px;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border-radius: var(--radius-md);
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--ink-soft);
-  font-size: 0.7rem;
-  line-height: 1.2;
+  line-height: 0;
   box-shadow: var(--shadow-1);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-standard),
