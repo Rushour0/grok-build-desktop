@@ -7,6 +7,23 @@ to tagged GitHub releases.
 v0.9.7 was the final version on the original feature roadmap. v0.9.8 begins a UX-craft
 pass: making what already shipped feel intentional, and fixing the transcript.
 
+## [v0.11.1]
+
+### Added
+
+- **File preview is a resizable side panel.** Generated/opened files (image, PDF, Word, and
+  now **video** — mp4/webm/mov) open in a right-docked panel you can drag to resize, beside
+  the conversation. Tool cards get an explicit **"View image / PDF / video"** button.
+- **Mouse-wheel zoom** in the image viewer.
+- **Minified sidebar.** Collapsing the sidebar now shrinks it to an icon rail instead of
+  hiding it entirely.
+
+### Fixed
+
+- **Preferences padding.** Section content was running to the modal edges.
+- Message actions and the titlebar buttons are cleaner, borderless icons; more breathing
+  room between transcript items.
+
 ## [v0.11.0]
 
 ### Added
