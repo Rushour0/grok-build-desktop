@@ -7,6 +7,14 @@ to tagged GitHub releases.
 v0.9.7 was the final version on the original feature roadmap. v0.9.8 begins a UX-craft
 pass: making what already shipped feel intentional, and fixing the transcript.
 
+## [v0.10.2]
+
+### Fixed
+
+- **Transcript items line up.** Thoughts, tool cards, and the assistant answer were each
+  landing at a slightly different left edge; every turn item now shares the one centered
+  column.
+
 ## [v0.10.1]
 
 A flat, minimal redesign toward a coder-first IDE feel (Codex / Zed / Linear), plus the
