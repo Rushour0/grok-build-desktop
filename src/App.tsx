@@ -59,6 +59,7 @@ import { TasksPanel } from "./TasksPanel";
 import { SessionsPanel } from "./SessionsPanel";
 import { PluginsPanel } from "./PluginsPanel";
 import { ConfigPanel } from "./ConfigPanel";
+import { WorktreesPanel } from "./WorktreesPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
 import { DocViewerPanel } from "./DocViewerPanel";
 import { detectDocFormat } from "./lib/docViewer/formatDetect";
@@ -562,6 +563,7 @@ export default function App() {
   const [sessionsPanelOpen, setSessionsPanelOpen] = useState(false);
   const [pluginsPanelOpen, setPluginsPanelOpen] = useState(false);
   const [configPanelOpen, setConfigPanelOpen] = useState(false);
+  const [worktreesPanelOpen, setWorktreesPanelOpen] = useState(false);
   // The Receipt overlay (command palette action) — a shareable Markdown export
   // of the active tab's transcript, floating over whatever screen is showing,
   // same idiom as `prefsOpen`/`tasksOpen` above.
@@ -2201,6 +2203,15 @@ export default function App() {
               </svg>
               Config &amp; Auth
             </button>
+            <button className="side-nav-item" onClick={() => setWorktreesPanelOpen(true)}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="6" cy="6" r="2.5" />
+                <circle cx="6" cy="18" r="2.5" />
+                <circle cx="18" cy="18" r="2.5" />
+                <path d="M6 8.5v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-.5M6 8.5V15.5" />
+              </svg>
+              Worktrees
+            </button>
           </nav>
           <input
             ref={searchInputRef}
@@ -2699,6 +2710,11 @@ export default function App() {
       <SessionsPanel open={sessionsPanelOpen} onClose={() => setSessionsPanelOpen(false)} />
       <PluginsPanel open={pluginsPanelOpen} onClose={() => setPluginsPanelOpen(false)} />
       <ConfigPanel open={configPanelOpen} onClose={() => setConfigPanelOpen(false)} />
+      <WorktreesPanel
+        open={worktreesPanelOpen}
+        onClose={() => setWorktreesPanelOpen(false)}
+        cwd={projectCwd ?? ""}
+      />
       <ReceiptPanel
         open={receiptOpen}
         onClose={() => setReceiptOpen(false)}

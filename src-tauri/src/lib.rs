@@ -33,6 +33,7 @@ use serde_json::{json, Value};
 mod panel_config;
 mod panel_plugins;
 mod panel_sessions;
+mod panel_worktrees;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 /// Reply channels for client->agent requests we're still waiting on, keyed by JSON-RPC id.
@@ -3254,6 +3255,7 @@ pub fn run() {
             panel_plugins::plugin_inventory,
             panel_config::read_grok_config,
             panel_config::read_grok_account,
+            panel_worktrees::list_worktrees,
             grok_installed,
             auth_status,
             grok_version,
