@@ -64,7 +64,14 @@ import { firstRunSteps } from "./lib/firstRun";
 import { CatPet } from "./CatPet";
 import { parseNotify, mergeTask, type TaskItem } from "./lib/notify";
 import { filterSlash, filterFiles, detectTrigger, applyPick } from "./lib/commands";
-import { isThemePref, applyTheme, type ThemePref } from "./lib/theme";
+import {
+  isThemePref,
+  applyTheme,
+  isAccentPref,
+  applyAccent,
+  type ThemePref,
+  type AccentPref,
+} from "./lib/theme";
 import "./App.css";
 
 // Installation is global. A *window* owns one project folder (Rust decides which,
@@ -532,6 +539,14 @@ export default function App() {
       return "system";
     }
   });
+  const [accent, setAccent] = useState<AccentPref>(() => {
+    try {
+      const stored = localStorage.getItem("accent");
+      return isAccentPref(stored) ? stored : "amber";
+    } catch {
+      return "amber";
+    }
+  });
   // The Preferences overlay (gear button / ⌘, / palette action). Not a Stage —
   // it floats over whatever screen is already showing, like the command palette.
   const [prefsOpen, setPrefsOpen] = useState(false);
@@ -738,6 +753,16 @@ export default function App() {
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, [theme]);
+
+  // Accent choice: persist + paint, the same way theme does.
+  useEffect(() => {
+    try {
+      localStorage.setItem("accent", accent);
+    } catch {
+      // Private-mode window with no storage still works; it just won't remember the choice.
+    }
+    applyAccent(accent);
+  }, [accent]);
 
   // Track whether the stream is scrolled to (near) its tail. A small threshold means a
   // stray pixel or the streaming caret's growth doesn't count as "scrolled away".
@@ -2564,6 +2589,8 @@ export default function App() {
         onClose={() => setPrefsOpen(false)}
         theme={theme}
         onThemeChange={setTheme}
+        accent={accent}
+        onAccentChange={setAccent}
         sessionInfo={activeTab?.sessionInfo}
         effortCommandAvailable={effortCommandAvailable}
         onSetEffort={onSetEffort}

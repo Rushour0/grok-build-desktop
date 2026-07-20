@@ -49,3 +49,22 @@ export function applyTheme(pref: ThemePref, root: HTMLElement = document.documen
     root.dataset.theme = pref;
   }
 }
+
+/** The accent colour the user can pick in Preferences > Appearance. Default: amber. */
+export type AccentPref = "amber" | "blue" | "green";
+
+const ACCENT_PREFS: readonly AccentPref[] = ["amber", "blue", "green"];
+
+/** Validate a value (e.g. from localStorage) as an AccentPref; callers fall back to "amber". */
+export function isAccentPref(v: unknown): v is AccentPref {
+  return typeof v === "string" && (ACCENT_PREFS as readonly string[]).includes(v);
+}
+
+/**
+ * Apply the accent choice to the document root via `data-accent`, which the
+ * `:root[data-accent="…"]` CSS blocks read. Orthogonal to theme: the theme sets the
+ * light/dark surfaces, the accent sets `--accent`; `light-dark()` reconciles the two.
+ */
+export function applyAccent(pref: AccentPref, root: HTMLElement = document.documentElement): void {
+  root.dataset.accent = pref;
+}

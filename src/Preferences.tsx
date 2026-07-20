@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { ThemePref } from "./lib/theme";
+import type { ThemePref, AccentPref } from "./lib/theme";
 import type { SessionModelInfo } from "./lib/bridge";
 
 /// Props for the Preferences overlay. Purely controlled/presentational: the
@@ -12,6 +12,8 @@ export interface PrefsProps {
   onClose: () => void;
   theme: ThemePref;
   onThemeChange: (t: ThemePref) => void;
+  accent: AccentPref;
+  onAccentChange: (a: AccentPref) => void;
   sessionInfo?: SessionModelInfo;
   /** True if grok advertised an effort/model slash-command in this session. */
   effortCommandAvailable: boolean;
@@ -35,6 +37,12 @@ const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
   { value: "system", label: "System" },
 ];
 
+const ACCENT_OPTIONS: { value: AccentPref; label: string }[] = [
+  { value: "amber", label: "Amber" },
+  { value: "blue", label: "Blue" },
+  { value: "green", label: "Green" },
+];
+
 /// Floating preferences overlay: fixed scrim + centered panel, cloned from
 /// the CommandPalette pattern (ESC + backdrop-click close). Controlled by
 /// `open`/`onClose` only — renders null when closed so it never eats focus
@@ -44,6 +52,8 @@ export function Preferences({
   onClose,
   theme,
   onThemeChange,
+  accent,
+  onAccentChange,
   sessionInfo,
   effortCommandAvailable,
   onSetEffort,
@@ -92,6 +102,22 @@ export function Preferences({
                   className={`seg-btn${theme === opt.value ? " active" : ""}`}
                   onClick={() => onThemeChange(opt.value)}
                 >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="prefs-row">
+            <span className="prefs-row-label">Accent</span>
+            <div className="seg">
+              {ACCENT_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`seg-btn seg-accent-${opt.value}${accent === opt.value ? " active" : ""}`}
+                  onClick={() => onAccentChange(opt.value)}
+                >
+                  <span className={`accent-dot accent-dot-${opt.value}`} aria-hidden="true" />
                   {opt.label}
                 </button>
               ))}
