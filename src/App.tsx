@@ -56,6 +56,9 @@ import { MessageActions } from "./MessageActions";
 import { RewindPanel } from "./RewindPanel";
 import { normalizeRewindPoints, type RewindMode } from "./lib/rewind";
 import { TasksPanel } from "./TasksPanel";
+import { SessionsPanel } from "./SessionsPanel";
+import { PluginsPanel } from "./PluginsPanel";
+import { ConfigPanel } from "./ConfigPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
 import { DocViewerPanel } from "./DocViewerPanel";
 import { detectDocFormat } from "./lib/docViewer/formatDetect";
@@ -556,6 +559,9 @@ export default function App() {
   // the active tab's `tasks`, floating over whatever screen is showing, same
   // idiom as `prefsOpen` above.
   const [tasksOpen, setTasksOpen] = useState(false);
+  const [sessionsPanelOpen, setSessionsPanelOpen] = useState(false);
+  const [pluginsPanelOpen, setPluginsPanelOpen] = useState(false);
+  const [configPanelOpen, setConfigPanelOpen] = useState(false);
   // The Receipt overlay (command palette action) — a shareable Markdown export
   // of the active tab's transcript, floating over whatever screen is showing,
   // same idiom as `prefsOpen`/`tasksOpen` above.
@@ -2168,6 +2174,34 @@ export default function App() {
               Open folder…
             </button>
           </div>
+          {/* Icon nav to the inspector panels — real destinations only (grok state we can
+              actually read), toward the reference's sidebar nav. */}
+          <nav className="side-nav" aria-label="Panels">
+            <button className="side-nav-item" onClick={() => setSessionsPanelOpen(true)}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 3v5h5" />
+                <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+                <path d="M12 7v5l3 2" />
+              </svg>
+              Sessions
+            </button>
+            <button className="side-nav-item" onClick={() => setPluginsPanelOpen(true)}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 2v4M12 22v-4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4" />
+                <circle cx="12" cy="12" r="3.2" />
+              </svg>
+              Plugins
+            </button>
+            <button className="side-nav-item" onClick={() => setConfigPanelOpen(true)}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M4 6h16M4 12h16M4 18h16" />
+                <circle cx="9" cy="6" r="2" fill="var(--panel)" />
+                <circle cx="15" cy="12" r="2" fill="var(--panel)" />
+                <circle cx="9" cy="18" r="2" fill="var(--panel)" />
+              </svg>
+              Config &amp; Auth
+            </button>
+          </nav>
           <input
             ref={searchInputRef}
             className="side-search"
@@ -2662,6 +2696,9 @@ export default function App() {
         onConfirm={(pointId, mode) => void confirmRewind(pointId, mode)}
       />
       <TasksPanel open={tasksOpen} onClose={() => setTasksOpen(false)} tasks={activeTab?.tasks ?? []} />
+      <SessionsPanel open={sessionsPanelOpen} onClose={() => setSessionsPanelOpen(false)} />
+      <PluginsPanel open={pluginsPanelOpen} onClose={() => setPluginsPanelOpen(false)} />
+      <ConfigPanel open={configPanelOpen} onClose={() => setConfigPanelOpen(false)} />
       <ReceiptPanel
         open={receiptOpen}
         onClose={() => setReceiptOpen(false)}

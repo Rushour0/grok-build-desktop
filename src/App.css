@@ -639,6 +639,36 @@ button.open-folder {
 .side-search:focus {
   border-color: var(--ink-soft);
 }
+/* Icon nav to the inspector panels (Sessions / Plugins / Config & Auth). */
+.side-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  margin-top: 0.6rem;
+}
+.side-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  font-weight: 500;
+  text-align: left;
+}
+.side-nav-item svg {
+  flex: none;
+  opacity: 0.85;
+}
+.side-nav-item:hover {
+  background: var(--panel-2);
+  color: var(--ink);
+}
+
 /* Section header over the conversation list — "Recents", like the reference. */
 .side-list-label {
   margin: 0.75rem 0 0.1rem;

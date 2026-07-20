@@ -27,6 +27,12 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
+
+// Read-only inspector panels (Sessions / Plugins / Config & Auth). Each is a self-contained
+// module exposing Tauri command(s); registered in the invoke_handler below.
+mod panel_config;
+mod panel_plugins;
+mod panel_sessions;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 /// Reply channels for client->agent requests we're still waiting on, keyed by JSON-RPC id.
@@ -3244,6 +3250,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             grok_profile,
+            panel_sessions::panel_sessions,
+            panel_plugins::plugin_inventory,
+            panel_config::read_grok_config,
+            panel_config::read_grok_account,
             grok_installed,
             auth_status,
             grok_version,
