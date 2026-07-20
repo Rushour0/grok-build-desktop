@@ -7,6 +7,26 @@ to tagged GitHub releases.
 v0.9.7 was the final version on the original feature roadmap. v0.9.8 begins a UX-craft
 pass: making what already shipped feel intentional, and fixing the transcript.
 
+## [v0.10.3]
+
+### Added
+
+- **Generated files open in a side panel.** When Grok produces an image, PDF, or Word doc,
+  it opens in a right-docked panel that slides in beside the conversation — the transcript
+  shrinks to make room and stays live, instead of a modal covering everything. Close with
+  the × or Esc.
+
+### Changed
+
+- **Message actions are icons.** Copy, Edit, and Rewind are compact icon buttons now, and
+  sit on the side their message is on — assistant actions on the left, your actions on the
+  right.
+
+### Fixed
+
+- **Generated images now open reliably.** The auto-open fires the moment the image finishes
+  generating, instead of at the end of the turn (which could miss it).
+
 ## [v0.10.2]
 
 ### Fixed
