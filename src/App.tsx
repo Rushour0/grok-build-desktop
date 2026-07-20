@@ -44,7 +44,6 @@ import {
   type SessionMeta,
   type SessionModelInfo,
   type SessionUpdate,
-  type ToolCallContent,
 } from "./lib/bridge";
 import { toolFieldsFromCall, mergeToolUpdate, toolContentOf, type ToolFields } from "./lib/toolMeta";
 import { ToolCard } from "./ToolCard";
@@ -62,7 +61,7 @@ import { ConfigPanel } from "./ConfigPanel";
 import { WorktreesPanel } from "./WorktreesPanel";
 import { ReceiptPanel } from "./ReceiptPanel";
 import { DocViewerPanel } from "./DocViewerPanel";
-import { detectDocFormat } from "./lib/docViewer/formatDetect";
+import { viewableAssetFrom } from "./lib/asset";
 import { EffortPicker } from "./EffortPicker";
 import { effortPickerModel } from "./lib/effort";
 import { FirstRunStepper } from "./FirstRunStepper";
@@ -277,38 +276,9 @@ export function isImagePath(path: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(path);
 }
 
-/// The most recent visual asset a *live* turn produced that the side viewer can open
-/// (image / pdf / docx), found among tool locations. Only tools with `endedAt` count —
-/// that field is set solely on the live path, never on `session/load` replay, so opening
-/// an old conversation never auto-pops the viewer for a historical file. Scans newest-first
-/// so the last file the turn touched wins. Returns null when the turn produced nothing
-/// viewable.
-function isViewablePath(path: string): boolean {
-  const fmt = detectDocFormat(path);
-  return fmt === "image" || fmt === "pdf" || fmt === "docx";
-}
-
-/// The viewable file (image / pdf / docx) a tool produced, from its `locations` OR its
-/// result `content`. File-touching tools (write_file, edit, …) list files in `locations`;
-/// image_gen carries NO `locations` and instead returns the saved file's absolute path in
-/// its result content — a `path` field or a `{"path":"…"}` JSON blob (the path lives in
-/// grok's session folder, which the Rust reader allows). Returns the first match, or null.
-export function viewableAssetFrom(
-  locations: { path: string }[] | undefined,
-  content: ToolCallContent[] | undefined,
-): string | null {
-  for (const loc of locations ?? []) {
-    if (isViewablePath(loc.path)) return loc.path;
-  }
-  for (const block of content ?? []) {
-    if (block.path && isViewablePath(block.path)) return block.path;
-    const text = block.content?.text ?? block.text;
-    const match = text?.match(/"path"\s*:\s*"([^"]+)"/);
-    if (match && isViewablePath(match[1])) return match[1];
-  }
-  return null;
-}
-
+/// The most recent visual asset a *live* turn produced that the side viewer can open —
+/// scans tool items newest-first (only tools with `endedAt`, i.e. live not replayed) and
+/// returns the first viewable file (via `viewableAssetFrom`). Null if nothing viewable.
 export function latestViewableAssetPath(items: Item[]): string | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i];

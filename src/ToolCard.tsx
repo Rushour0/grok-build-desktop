@@ -10,6 +10,7 @@
 import { useState } from "react";
 import type { ToolItem } from "./App";
 import { detectDocFormat } from "./lib/docViewer/formatDetect";
+import { viewableAssetFrom } from "./lib/asset";
 
 function prettyJson(value: unknown): string {
   if (value === undefined) return "";
@@ -54,22 +55,42 @@ export function ToolCard({
   const input = prettyJson(item.meta.canonicalInput ?? item.rawInput);
   const output = outputTextOf(item);
   const duration = durationOf(item);
+  // A produced image / pdf / doc (from `locations` or, for image_gen, its result content) —
+  // gets an explicit "View" button so it can be opened in the side viewer any time, not only
+  // via the one-shot auto-open.
+  const viewable = viewableAssetFrom(item.locations, item.content);
 
   return (
     <div className={"tool-card " + item.status + (expanded ? " expanded" : "") + (failed ? " failed" : "")}>
-      <button
-        type="button"
-        className="tool-card-head"
-        onClick={() => setExpanded((e) => !e)}
-        aria-expanded={expanded}
-      >
-        <span className="tool-card-icon" data-kind={item.meta.semanticKind} />
-        <span className="tool-card-label">{label}</span>
-        {item.meta.readOnly && <span className="tool-card-ro">read-only</span>}
-        <span className="tool-card-status" />
-        {duration && <span className="tool-card-dur">{duration}</span>}
-        <span className="tool-card-chevron" />
-      </button>
+      <div className="tool-card-headrow">
+        <button
+          type="button"
+          className="tool-card-head"
+          onClick={() => setExpanded((e) => !e)}
+          aria-expanded={expanded}
+        >
+          <span className="tool-card-icon" data-kind={item.meta.semanticKind} />
+          <span className="tool-card-label">{label}</span>
+          {item.meta.readOnly && <span className="tool-card-ro">read-only</span>}
+          <span className="tool-card-status" />
+          {duration && <span className="tool-card-dur">{duration}</span>}
+          <span className="tool-card-chevron" />
+        </button>
+        {viewable && onOpenDocument && (
+          <button
+            type="button"
+            className="tool-card-view"
+            onClick={() => onOpenDocument(viewable)}
+            title="Open in the side viewer"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            View
+          </button>
+        )}
+      </div>
       {expanded && (
         <div className="tool-card-body">
           <div className="tool-card-section">

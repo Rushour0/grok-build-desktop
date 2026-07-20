@@ -500,12 +500,14 @@ button.recent span {
   flex: 1;
   align-self: stretch;
 }
-.sidebar-toggle {
+.sidebar-toggle,
+.prefs-toggle,
+.tasks-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 22px;
+  width: 28px;
+  height: 24px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -515,15 +517,21 @@ button.recent span {
   transition: color var(--dur-fast) var(--ease-standard),
     background var(--dur-fast) var(--ease-standard), transform var(--dur-fast) var(--ease-out);
 }
-.sidebar-toggle:hover:not(:disabled) {
+.sidebar-toggle:hover:not(:disabled),
+.prefs-toggle:hover:not(:disabled),
+.tasks-toggle:hover:not(:disabled) {
   color: var(--ink);
-  background: var(--bg);
-  transform: scale(1.1);
+  background: var(--panel-2);
+  transform: scale(1.08);
 }
-.sidebar-toggle:active:not(:disabled) {
+.sidebar-toggle:active:not(:disabled),
+.prefs-toggle:active:not(:disabled),
+.tasks-toggle:active:not(:disabled) {
   transform: scale(0.94);
 }
-.sidebar-toggle svg {
+.sidebar-toggle svg,
+.prefs-toggle svg,
+.tasks-toggle svg {
   display: block;
 }
 /* On the splash there's no column to sit in, so it floats over the top edge instead of
@@ -1226,7 +1234,7 @@ button.tab-close:hover {
   scroll-padding-block: 0.75rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 1rem;
 }
 /* The lane, applied uniformly: every turn — prose, tool card, plan, receipt — is capped
    to `--lane` and centred by auto side-margins, so user and assistant read as one column
@@ -1723,11 +1731,11 @@ button.tab-close:hover {
   height: 1.6rem;
   padding: 0;
   border-radius: var(--radius-md);
-  border: 1px solid var(--line);
-  background: var(--panel);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--ink-soft);
   line-height: 0;
-  box-shadow: var(--shadow-1);
+  box-shadow: none;
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-standard),
     background var(--dur-fast) var(--ease-standard),
@@ -1736,7 +1744,7 @@ button.tab-close:hover {
 .msg-action:hover,
 .msg-action:focus-visible {
   color: var(--ink);
-  border-color: color-mix(in srgb, var(--ink) 25%, var(--line));
+  background: var(--panel-2);
 }
 .msg-action:focus-visible {
   outline: 2px solid var(--ink-soft);
@@ -2289,6 +2297,34 @@ textarea:focus-visible {
 }
 .tool-card-head:hover {
   background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+/* Header row: the collapsible toggle + an optional "View" button for a produced file. */
+.tool-card-headrow {
+  display: flex;
+  align-items: stretch;
+}
+.tool-card-headrow > .tool-card-head {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+}
+.tool-card-view {
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0 0.5rem;
+  padding: 0.22rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+.tool-card-view:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
 }
 /* A generic dot by default; specific kinds (read/write/exec/search/…) get a shape via
    `data-kind` so the icon still reads without pulling in an icon font or SVG sprite. */
